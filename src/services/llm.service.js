@@ -1,4 +1,9 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const querystring = require('querystring');
+const { shell } = require('electron');
 const logger = require('../core/logger').createServiceLogger('LLM');
 const config = require('../core/config');
 const { promptLoader } = require('../../prompt-loader');
@@ -10,44 +15,364 @@ class LLMService {
     this.isInitialized = false;
     this.requestCount = 0;
     this.errorCount = 0;
-    
+    this.provider = config.get('llm.provider') || 'gemini';
+    this.modelName = config.get('llm.model') || this.getProviderDefaultModel(this.provider);
+    this.authModes = { ...(config.get('llm.authModes') || {}) };
+    this.openaiOAuthToken = null;
+
+    this.loadOAuthTokenFromDisk();
     this.initializeClient();
   }
 
-  initializeClient() {
-    const apiKey = config.getApiKey('GEMINI');
-    
-    if (!apiKey || apiKey === 'your-api-key-here') {
-      logger.warn('Gemini API key not configured', { 
-        keyExists: !!apiKey,
-        isPlaceholder: apiKey === 'your-api-key-here'
-      });
-      return;
+  getProviderDefaultModel(provider) {
+    const models = config.get(`llm.providers.${provider}.models`) || [];
+    return models[0] || 'gemini-2.5-flash';
+  }
+
+  getCurrentProvider() {
+    return this.provider || config.get('llm.provider') || 'gemini';
+  }
+
+  getCurrentModel() {
+    return this.modelName || config.get('llm.model') || this.getProviderDefaultModel(this.getCurrentProvider());
+  }
+
+  getProviderConfig(provider = this.getCurrentProvider()) {
+    return config.get(`llm.providers.${provider}`) || {};
+  }
+
+  getProviderEndpoint(provider = this.getCurrentProvider(), model = this.getCurrentModel()) {
+    if (provider === 'codex') {
+      return 'https://chatgpt.com/backend-api/codex/responses';
+    }
+
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
+    if (normalizedProvider === 'openai') {
+      return 'https://api.openai.com/v1/chat/completions';
+    }
+    if (normalizedProvider === 'anthropic') {
+      return 'https://api.anthropic.com/v1/messages';
+    }
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  }
+
+  getProviderApiKey(provider) {
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
+    const envMap = {
+      gemini: 'GEMINI_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      anthropic: 'ANTHROPIC_API_KEY'
+    };
+
+    if (provider === 'codex') {
+      return this.openaiOAuthToken;
+    }
+
+    if (normalizedProvider === 'openai' && this.getProviderAuthMode('openai') === 'oauth') {
+      return this.openaiOAuthToken;
+    }
+
+    return process.env[envMap[normalizedProvider]];
+  }
+
+  getProviderAuthMode(provider) {
+    if (provider === 'codex') return 'oauth';
+    return this.authModes?.[provider] || 'apiKey';
+  }
+
+  getProviderDisplayName(provider = this.getCurrentProvider()) {
+    const names = {
+      gemini: 'Gemini',
+      openai: 'OpenAI',
+      codex: 'Codex',
+      anthropic: 'Anthropic'
+    };
+    return names[provider] || provider;
+  }
+
+
+  setProviderAuthMode(provider, mode = 'apiKey') {
+    this.authModes = { ...this.authModes, [provider]: mode };
+  }
+
+  setAuthModes(modes = {}) {
+    this.authModes = { ...(config.get('llm.authModes') || {}), ...modes };
+  }
+
+  getAuthModes() {
+    return { ...(config.get('llm.authModes') || {}), ...this.authModes };
+  }
+
+  getAuthConfigFilePath() {
+    const dir = config.get('app.dataDir');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return path.join(dir, 'auth-config.json');
+  }
+
+  readAuthConfig() {
+    const filePath = this.getAuthConfigFilePath();
+    if (!fs.existsSync(filePath)) {
+      return { tokens: {} };
     }
 
     try {
-      this.client = new GoogleGenerativeAI(apiKey);
-      
-      // Use the correct model name for v1 API
-      const modelName = config.get('llm.gemini.model');
-      this.model = this.client.getGenerativeModel({ 
-        model: modelName,
-        generationConfig: this.getGenerationConfig()
-      });
-      this.isInitialized = true;
-      
-      logger.info('Gemini AI client initialized successfully', {
-        model: modelName
-      });
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!parsed || typeof parsed !== 'object') {
+        return { tokens: {} };
+      }
+      if (!parsed.tokens || typeof parsed.tokens !== 'object') {
+        parsed.tokens = {};
+      }
+      return parsed;
     } catch (error) {
-      logger.error('Failed to initialize Gemini client', { 
-        error: error.message 
-      });
+      logger.warn('Failed to parse auth config file', { error: error.message });
+      return { tokens: {} };
     }
   }
 
+  writeAuthConfig(configObject) {
+    try {
+      const filePath = this.getAuthConfigFilePath();
+      fs.writeFileSync(filePath, JSON.stringify(configObject, null, 2), 'utf8');
+    } catch (error) {
+      logger.warn('Failed to write auth config file', { error: error.message });
+    }
+  }
+
+  loadOAuthTokenFromDisk() {
+    try {
+      const authConfig = this.readAuthConfig();
+      this.openaiOAuthToken = String(authConfig.tokens?.openai?.accessToken || '').trim() || null;
+
+      // Backward compatibility for older single-token file.
+      if (!this.openaiOAuthToken) {
+        const legacyPath = path.join(config.get('app.dataDir'), 'oauth-openai.token');
+        if (fs.existsSync(legacyPath)) {
+          this.openaiOAuthToken = String(fs.readFileSync(legacyPath, 'utf8') || '').trim() || null;
+          if (this.openaiOAuthToken) {
+            this.setCodexAuthToken(this.openaiOAuthToken);
+            try { fs.unlinkSync(legacyPath); } catch (_) {}
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn('Failed to load Codex auth token', { error: error.message });
+    }
+  }
+
+  setCodexAuthToken(token) {
+    this.openaiOAuthToken = String(token || '').trim() || null;
+    const authConfig = this.readAuthConfig();
+
+    if (this.openaiOAuthToken) {
+      authConfig.tokens.openai = {
+        accessToken: this.openaiOAuthToken,
+        updatedAt: new Date().toISOString()
+      };
+    } else if (authConfig.tokens?.openai) {
+      delete authConfig.tokens.openai;
+    }
+
+    this.writeAuthConfig(authConfig);
+    this.isInitialized = false;
+    this.initializeClient();
+  }
+
+
+  base64UrlEncode(buffer) {
+    return Buffer.from(buffer)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+  }
+
+  createPkcePair() {
+    const verifier = this.base64UrlEncode(crypto.randomBytes(64));
+    const challenge = this.base64UrlEncode(crypto.createHash('sha256').update(verifier).digest());
+    return { verifier, challenge };
+  }
+
+  buildCodexAuthorizeUrl(options = {}) {
+    const clientId = (process.env.CODEX_CLIENT_ID || 'app_EMoamEEZ73f0CkXaXp7hrann').trim();
+    const runtimeRedirectUri = String(options.redirectUri || '').trim();
+    const redirectUri = runtimeRedirectUri || (process.env.CODEX_REDIRECT_URI || 'http://localhost:1455/auth/callback').trim();
+    const scope = (process.env.CODEX_SCOPE || 'openid profile email offline_access').trim() || 'openid profile email offline_access';
+    const authorizeBase = (process.env.CODEX_AUTHORIZE_URL || 'https://auth.openai.com/oauth/authorize').trim();
+    const state = crypto.randomBytes(16).toString('hex');
+    const { verifier, challenge } = this.createPkcePair();
+
+    const params = {
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state,
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
+      originator: 'codex_cli_rs'
+    };
+
+    try {
+      const url = new URL(authorizeBase);
+      Object.entries(params).forEach(([key, value]) => {
+        url.searchParams.set(key, String(value));
+      });
+      return { url: url.toString(), state, verifier, clientId, redirectUri };
+    } catch (error) {
+      // Fallback keeps auth usable even if URL parsing fails unexpectedly.
+      const qs = querystring.stringify(params);
+      const normalizedBase = String(authorizeBase || '').includes('?')
+        ? `${authorizeBase}&${qs}`
+        : `${authorizeBase}?${qs}`;
+      return { url: normalizedBase, state, verifier, clientId, redirectUri };
+    }
+  }
+
+  async startCodexLoginFlow(options = {}) {
+    const shouldOpenBrowser = options.openBrowser !== false;
+
+    try {
+      const authRequest = this.buildCodexAuthorizeUrl(options);
+      let openedBrowser = false;
+      let openBrowserError = null;
+
+      if (shouldOpenBrowser) {
+        try {
+          await shell.openExternal(authRequest.url);
+          openedBrowser = true;
+        } catch (error) {
+          openBrowserError = error?.message || 'Failed to open browser automatically';
+          logger.warn('Failed to open Codex login URL automatically', { error: openBrowserError });
+        }
+      }
+
+      return {
+        success: true,
+        loginUrl: authRequest.url,
+        state: authRequest.state,
+        verifier: authRequest.verifier,
+        clientId: authRequest.clientId,
+        redirectUri: authRequest.redirectUri,
+        openedBrowser,
+        openBrowserError,
+        instructions: shouldOpenBrowser
+          ? (openedBrowser
+              ? 'Complete browser login. OAuth callback will finish setup automatically.'
+              : 'Browser did not open automatically. Copy this URL and open it manually.')
+          : 'Copy this URL, open it in a browser, and complete login.'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        instructions: 'Failed to create OpenAI Authorize URL.'
+      };
+    }
+  }
+
+  async performJsonRequest(url, options = {}) {
+    const body = options.body || {};
+    const formEncoded = options.formEncoded === true;
+    const postData = formEncoded
+      ? querystring.stringify(body)
+      : JSON.stringify(body);
+
+    const headers = {
+      'Content-Type': formEncoded ? 'application/x-www-form-urlencoded' : 'application/json',
+      ...(options.headers || {}),
+      'Content-Length': Buffer.byteLength(postData)
+    };
+
+    const requestOptions = {
+      method: options.method || 'POST',
+      headers,
+      timeout: options.timeout || 15000
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(url, requestOptions, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+            return;
+          }
+          try {
+            resolve(data ? JSON.parse(data) : {});
+          } catch (error) {
+            reject(new Error(`Failed to parse JSON response: ${error.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => reject(new Error(`Login request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Login request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  async exchangeCodexOAuthCode({ code, codeVerifier, clientId, redirectUri }) {
+    if (!code || !codeVerifier || !clientId || !redirectUri) {
+      throw new Error('Missing OAuth code exchange parameters');
+    }
+
+    const tokenEndpoint = (process.env.CODEX_TOKEN_URL || 'https://auth.openai.com/oauth/token').trim();
+
+    return this.performJsonRequest(tokenEndpoint, {
+      method: 'POST',
+      formEncoded: true,
+      body: {
+        grant_type: 'authorization_code',
+        code,
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier
+      }
+    });
+  }
+
+
+  initializeClient() {
+    const provider = this.getCurrentProvider();
+    const modelName = this.getCurrentModel();
+    const apiKey = this.getProviderApiKey(provider);
+
+    if (!apiKey || String(apiKey).includes('your_')) {
+      logger.warn('LLM credentials not configured', {
+        provider,
+        authMode: this.getProviderAuthMode(provider),
+        keyExists: !!apiKey
+      });
+      this.isInitialized = false;
+      return;
+    }
+
+    this.provider = provider;
+    this.modelName = modelName;
+    this.isInitialized = true;
+
+    logger.info('LLM provider initialized successfully', {
+      provider,
+      model: modelName
+    });
+  }
+
   getGenerationConfig(overrides = {}) {
-    const defaults = config.get('llm.gemini.generation') || {};
+    const provider = this.getCurrentProvider();
+    const defaults = config.get(`llm.providers.${provider}.generation`) || {};
     const fallback = {
       temperature: 0.7,
       topK: 40,
@@ -74,7 +399,7 @@ class LLMService {
         : [];
 
     if (!candidates.length) {
-      throw new Error('No candidates in Gemini response');
+      throw new Error('No candidates in provider response');
     }
 
     const candidateWithText = candidates.find(candidate => {
@@ -117,7 +442,7 @@ class LLMService {
    */
   async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
 
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
@@ -153,31 +478,7 @@ class LLMService {
         request.systemInstruction = { parts: [{ text: skillPrompt }] };
       }
 
-      // Execute with retries/timeout - try alternative method first for network reliability
-      let responseText;
-      const preferAlternative = !!config.get('llm.gemini.enableFallbackMethod');
-      try {
-        if (preferAlternative) {
-          logger.debug('Attempting alternative HTTPS method first for reliability');
-          responseText = await this.executeAlternativeRequest(request);
-        } else {
-          responseText = await this.executeRequest(request);
-        }
-      } catch (error) {
-        const secondaryLabel = preferAlternative ? 'primary SDK method' : 'alternative HTTPS method';
-        logger.warn(`${preferAlternative ? 'Alternative' : 'Primary'} method failed, trying ${secondaryLabel}`, { error: error.message });
-        const secondaryFn = preferAlternative ? this.executeRequest.bind(this) : this.executeAlternativeRequest.bind(this);
-
-        try {
-          responseText = await secondaryFn(request);
-        } catch (secondaryError) {
-          logger.error('Both Gemini request methods failed', {
-            firstError: error.message,
-            secondError: secondaryError.message
-          });
-          throw secondaryError;
-        }
-      }
+      let responseText = await this.executeRequest(request);
 
       // Enforce language in code fences if provided
       const finalResponse = programmingLanguage
@@ -196,6 +497,8 @@ class LLMService {
         response: finalResponse,
         metadata: {
           skill: activeSkill,
+          provider: this.getCurrentProvider(),
+          authMode: this.getProviderAuthMode(this.getCurrentProvider()),
           programmingLanguage,
           processingTime: Date.now() - startTime,
           requestId: this.requestCount,
@@ -212,8 +515,8 @@ class LLMService {
         requestId: this.requestCount
       });
 
-      if (config.get('llm.gemini.fallbackEnabled')) {
-        return this.generateFallbackResponse('[image]', activeSkill);
+      if (this.getProviderConfig().fallbackEnabled !== false) {
+        return this.generateFallbackResponse('[image]', activeSkill, error);
       }
       throw error;
     }
@@ -226,7 +529,7 @@ class LLMService {
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
 
     const startTime = Date.now();
@@ -243,33 +546,7 @@ class LLMService {
 
       const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
-      const preferAlternative = !!config.get('llm.gemini.enableFallbackMethod');
-      let response;
-      try {
-        if (preferAlternative) {
-          logger.debug('Attempting alternative HTTPS method first for text processing');
-          response = await this.executeAlternativeRequest(geminiRequest);
-        } else {
-          response = await this.executeRequest(geminiRequest);
-        }
-      } catch (error) {
-        const secondaryLabel = preferAlternative ? 'primary SDK method' : 'alternative HTTPS method';
-        logger.warn(`${preferAlternative ? 'Alternative' : 'Primary'} method failed, trying ${secondaryLabel}`, {
-          error: error.message,
-          requestId: this.requestCount
-        });
-        const secondaryFn = preferAlternative ? this.executeRequest.bind(this) : this.executeAlternativeRequest.bind(this);
-        try {
-          response = await secondaryFn(geminiRequest);
-        } catch (secondaryError) {
-          logger.error('Both Gemini request methods failed for text processing', {
-            firstError: error.message,
-            secondError: secondaryError.message,
-            requestId: this.requestCount
-          });
-          throw secondaryError;
-        }
-      }
+      const response = await this.executeRequest(geminiRequest);
       
       // Enforce language in code fences if programmingLanguage specified
       const finalResponse = programmingLanguage
@@ -303,8 +580,8 @@ class LLMService {
         requestId: this.requestCount
       });
 
-      if (config.get('llm.gemini.fallbackEnabled')) {
-        return this.generateFallbackResponse(text, activeSkill);
+      if (this.getProviderConfig().fallbackEnabled !== false) {
+        return this.generateFallbackResponse(text, activeSkill, error);
       }
       
       throw error;
@@ -313,7 +590,7 @@ class LLMService {
 
   async processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
 
     const startTime = Date.now();
@@ -330,33 +607,7 @@ class LLMService {
 
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
-      const preferAlternative = !!config.get('llm.gemini.enableFallbackMethod');
-      let response;
-      try {
-        if (preferAlternative) {
-          logger.debug('Attempting alternative HTTPS method first for transcription processing');
-          response = await this.executeAlternativeRequest(geminiRequest);
-        } else {
-          response = await this.executeRequest(geminiRequest);
-        }
-      } catch (error) {
-        const secondaryLabel = preferAlternative ? 'primary SDK method' : 'alternative HTTPS method';
-        logger.warn(`${preferAlternative ? 'Alternative' : 'Primary'} method failed, trying ${secondaryLabel}`, {
-          error: error.message,
-          requestId: this.requestCount
-        });
-        const secondaryFn = preferAlternative ? this.executeRequest.bind(this) : this.executeAlternativeRequest.bind(this);
-        try {
-          response = await secondaryFn(geminiRequest);
-        } catch (secondaryError) {
-          logger.error('Both Gemini request methods failed for transcription processing', {
-            firstError: error.message,
-            secondError: secondaryError.message,
-            requestId: this.requestCount
-          });
-          throw secondaryError;
-        }
-      }
+      const response = await this.executeRequest(geminiRequest);
       
       // Enforce language in code fences if programmingLanguage specified
       const finalResponse = programmingLanguage
@@ -391,8 +642,8 @@ class LLMService {
         requestId: this.requestCount
       });
 
-      if (config.get('llm.gemini.fallbackEnabled')) {
-        return this.generateIntelligentFallbackResponse(text, activeSkill);
+      if (this.getProviderConfig().fallbackEnabled !== false) {
+        return this.generateIntelligentFallbackResponse(text, activeSkill, error);
       }
       
       throw error;
@@ -659,6 +910,26 @@ Assume you are asked a question in ${activeSkill.toUpperCase()} mode. Your job i
 Assume you are in an interview and you need to perform best in ${activeSkill.toUpperCase()} mode.
 Always respond to the point, do not repeat the question or unnecessary information which is not related to ${activeSkill}.`;
 
+    if (activeSkill === 'general') {
+  let prompt = `# General Conversation Mode
+
+You are in General mode. General mode is the unrestricted default mode for normal conversation and all-purpose assistance.
+
+Respond naturally to greetings, casual conversation, tests, follow-up messages, and general questions.
+Do not redirect the user by saying they must ask something relevant to general.
+Do not treat casual conversation as invalid.
+If the user says hello, greets you, tests the system, or asks a broad question, respond normally and helpfully.
+
+## Response Rules
+
+- Greetings should receive a normal greeting.
+- Test messages should receive a normal confirmation.
+- Casual conversation is allowed.
+- General questions should be answered directly.
+- Complex questions should receive detailed, structured answers when useful.
+- Do not reject or redirect messages for being informal, broad, or off-topic.
+- General mode should act as a normal all-purpose assistant.`;
+    }
     // Add programming language context if provided
     if (programmingLanguage) {
       const lang = String(programmingLanguage).toLowerCase();
@@ -673,27 +944,18 @@ Always respond to the point, do not repeat the question or unnecessary informati
 
 ## Response Rules:
 
-### If the transcription is casual conversation, greetings, or NOT related to ${activeSkill}:
-- Respond with: "Yeah, I'm listening. Ask your question relevant to ${activeSkill}."
-- Or similar brief acknowledgments like: "I'm here, what's your ${activeSkill} question?"
-
 ### If the transcription IS relevant to ${activeSkill} or is a follow-up question:
 - Provide a comprehensive, detailed response
 - Use bullet points, examples, and explanations
 - Focus on actionable insights and complete answers
 - Do not truncate or shorten your response
 
-### Examples of casual/irrelevant messages:
-- "Hello", "Hi there", "How are you?"
-- "What's the weather like?"
-- "I'm just testing this"
-- Random conversations not related to ${activeSkill}
+## Response Style
 
-### Examples of relevant messages:
-- Actual questions about ${activeSkill} concepts
-- Follow-up questions to previous responses
-- Requests for clarification on ${activeSkill} topics
-- Problem-solving requests related to ${activeSkill}
+- Be natural, clear, and useful.
+- Keep simple replies short.
+- Expand when the question needs detail.
+- Use structure only when it improves clarity.
 
 ## Response Format:
 - Keep responses detailed
@@ -712,123 +974,542 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     return `Context: ${activeSkill.toUpperCase()} analysis request\n\nText to analyze:\n${text}`;
   }
 
-  async executeRequest(geminiRequest) {
-    const maxRetries = config.get('llm.gemini.maxRetries');
-    const timeout = config.get('llm.gemini.timeout');
-    
-    // Add request debugging
-    logger.debug('Executing Gemini request', {
-      hasModel: !!this.model,
-      hasClient: !!this.client,
-      requestKeys: Object.keys(geminiRequest),
+  async executeRequest(requestPayload) {
+    const provider = this.getCurrentProvider();
+    const providerConfig = this.getProviderConfig(provider);
+    const maxRetries = providerConfig.maxRetries || 3;
+    const timeout = providerConfig.timeout || 60000;
+
+    logger.debug('Executing LLM request', {
+      provider,
+      model: this.getCurrentModel(),
       timeout,
-      maxRetries,
-      nodeVersion: process.version,
-      platform: process.platform
+      maxRetries
     });
-    
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Pre-flight check
         await this.performPreflightCheck();
-        
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Request timeout')), timeout)
-        );
-        
-        logger.debug(`Gemini API attempt ${attempt} starting`, {
-          timestamp: new Date().toISOString(),
-          timeout
-        });
-        
-        const requestPromise = this.model.generateContent(geminiRequest);
-        const result = await Promise.race([requestPromise, timeoutPromise]);
-        
-        if (!result.response) {
-          throw new Error('Empty response from Gemini API');
-        }
+        const response = await this.executeProviderRequest(requestPayload, provider, timeout);
 
-        const { text, finishReason } = this.extractTextFromCandidates(result.response);
-
-        if (finishReason === 'MAX_TOKENS') {
-          logger.warn('Gemini primary response reached max tokens limit', {
-            attempt,
-            finishReason
-          });
-        }
-
-        logger.debug('Gemini API request successful', {
+        logger.debug('LLM request successful', {
+          provider,
           attempt,
-          responseLength: text.length,
-          finishReason
+          responseLength: response.length
         });
 
-        return text;
+        return response;
       } catch (error) {
         const errorInfo = this.analyzeError(error);
-        
-        // Enhanced error logging for fetch failures
-        if (errorInfo.type === 'NETWORK_ERROR') {
-          logger.error('Network error details', {
-            attempt,
-            errorMessage: error.message,
-            errorStack: error.stack,
-            errorName: error.name,
-            nodeEnv: process.env.NODE_ENV,
-            electronVersion: process.versions.electron,
-            chromeVersion: process.versions.chrome,
-            nodeVersion: process.versions.node,
-            userAgent: this.getUserAgent()
-          });
-        }
-        
-        logger.warn(`Gemini API attempt ${attempt} failed`, {
+
+        logger.warn(`LLM API attempt ${attempt} failed`, {
+          provider,
           error: error.message,
           errorType: errorInfo.type,
-          isNetworkError: errorInfo.isNetworkError,
-          suggestedAction: errorInfo.suggestedAction,
           remainingAttempts: maxRetries - attempt
         });
 
         if (attempt === maxRetries) {
-          const finalError = new Error(`Gemini API failed after ${maxRetries} attempts: ${error.message}`);
+          const finalError = new Error(`LLM API failed after ${maxRetries} attempts: ${error.message}`);
           finalError.errorAnalysis = errorInfo;
           finalError.originalError = error;
           throw finalError;
         }
 
-        // Use exponential backoff with jitter for network errors
         const baseDelay = errorInfo.isNetworkError ? 2500 : 1500;
-        const delay = baseDelay * attempt + Math.random() * 1000;
-        
-        logger.debug(`Waiting ${delay}ms before retry ${attempt + 1}`, {
-          baseDelay,
-          isNetworkError: errorInfo.isNetworkError
-        });
-        
-        await this.delay(delay);
+        await this.delay(baseDelay * attempt + Math.random() * 1000);
       }
     }
   }
 
-  async performPreflightCheck() {
-    // Quick connectivity check
+  async executeProviderRequest(requestPayload, provider, timeout) {
+    const apiKey = this.getProviderApiKey(provider);
+    const endpoint = this.getProviderEndpoint(provider, this.getCurrentModel());
+    const body = this.toProviderPayload(requestPayload, provider);
+    const headers = this.getProviderHeaders(provider, apiKey, body);
+
+    const raw = await this.performHttpsPost(endpoint, body, headers, timeout);
+    return this.extractProviderText(raw, provider);
+  }
+
+  toProviderPayload(geminiRequest, provider) {
+    if (provider === 'codex') {
+      const instructions = this.extractSystemInstruction(geminiRequest) || 'You are a helpful coding assistant.';
+      return {
+        model: this.getCurrentModel(),
+        instructions,
+        input: this.convertToCodexInput(geminiRequest),
+        store: false,
+        stream: true,
+        reasoning: { effort: 'medium', summary: 'auto' },
+        text: { verbosity: 'medium' },
+        include: ['reasoning.encrypted_content']
+      };
+    }
+
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
+
+    if (normalizedProvider === 'openai') {
+      return {
+        model: this.getCurrentModel(),
+        messages: this.convertToOpenAIMessages(geminiRequest),
+        temperature: geminiRequest.generationConfig?.temperature,
+        top_p: geminiRequest.generationConfig?.topP,
+        max_tokens: geminiRequest.generationConfig?.maxOutputTokens
+      };
+    }
+
+    if (normalizedProvider === 'anthropic') {
+      const messages = this.convertToAnthropicMessages(geminiRequest).filter(msg => msg.role !== 'system');
+      const system = this.extractSystemInstruction(geminiRequest) || undefined;
+      return {
+        model: this.getCurrentModel(),
+        max_tokens: geminiRequest.generationConfig?.maxOutputTokens || 4096,
+        temperature: geminiRequest.generationConfig?.temperature,
+        top_p: geminiRequest.generationConfig?.topP,
+        system,
+        messages
+      };
+    }
+
+    return geminiRequest;
+  }
+
+  convertToOpenAIMessages(geminiRequest) {
+    const messages = [];
+    const systemText = this.extractSystemInstruction(geminiRequest);
+    if (systemText) {
+      messages.push({ role: 'system', content: systemText });
+    }
+
+    for (const entry of geminiRequest.contents || []) {
+      const role = entry.role === 'model' ? 'assistant' : 'user';
+      const content = [];
+
+      for (const part of (entry.parts || [])) {
+        if (part.text) {
+          content.push({ type: 'text', text: part.text });
+        } else if (part.inlineData) {
+          const mime = part.inlineData.mimeType || 'image/png';
+          content.push({
+            type: 'image_url',
+            image_url: { url: `data:${mime};base64,${part.inlineData.data}` }
+          });
+        }
+      }
+
+      if (content.length) {
+        messages.push({ role, content: content.length === 1 && content[0].type === 'text' ? content[0].text : content });
+      }
+    }
+
+    return messages;
+  }
+
+  convertToAnthropicMessages(geminiRequest) {
+    const messages = [];
+
+    for (const entry of geminiRequest.contents || []) {
+      const role = entry.role === 'model' ? 'assistant' : 'user';
+      const content = [];
+
+      for (const part of (entry.parts || [])) {
+        if (part.text) {
+          content.push({ type: 'text', text: part.text });
+        } else if (part.inlineData) {
+          content.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: part.inlineData.mimeType || 'image/png',
+              data: part.inlineData.data
+            }
+          });
+        }
+      }
+
+      if (content.length) {
+        messages.push({ role, content });
+      }
+    }
+
+    return messages;
+  }
+
+  convertToCodexInput(geminiRequest) {
+    const input = [];
+
+    for (const entry of geminiRequest.contents || []) {
+      const role = entry.role === 'model' ? 'assistant' : 'user';
+      const content = [];
+
+      for (const part of (entry.parts || [])) {
+        if (part.text) {
+          const textType = role === 'assistant' ? 'output_text' : 'input_text';
+          content.push({ type: textType, text: part.text });
+        } else if (part.inlineData && role === 'user') {
+          const mime = part.inlineData.mimeType || 'image/png';
+          content.push({
+            type: 'input_image',
+            image_url: `data:${mime};base64,${part.inlineData.data}`
+          });
+        }
+      }
+
+      if (content.length) {
+        input.push({ type: 'message', role, content });
+      }
+    }
+
+    return input;
+  }
+
+  extractSystemInstruction(geminiRequest) {
+    const parts = geminiRequest.systemInstruction?.parts || [];
+    return parts.map(part => part.text || '').filter(Boolean).join('\n').trim();
+  }
+
+  getProviderHeaders(provider, apiKey, payload) {
+    const postData = JSON.stringify(payload);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(postData),
+      'User-Agent': this.getUserAgent()
+    };
+
+    if (provider === 'codex') {
+      headers.Authorization = `Bearer ${apiKey}`;
+      headers['OpenAI-Beta'] = 'responses=experimental';
+      headers.originator = 'codex_cli_rs';
+      headers.accept = 'application/json, text/event-stream';
+      const accountId = this.getCodexAccountIdFromToken(apiKey);
+      if (accountId) {
+        headers['chatgpt-account-id'] = accountId;
+      }
+      return headers;
+    }
+
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
+    if (normalizedProvider === 'openai') {
+      headers.Authorization = `Bearer ${apiKey}`;
+    } else if (normalizedProvider === 'anthropic') {
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      headers['x-goog-api-key'] = apiKey;
+    }
+
+    return headers;
+  }
+
+  performHttpsPost(url, payload, headers, timeout) {
+    const postData = JSON.stringify(payload);
+    const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+
+    const options = {
+      method: 'POST',
+      headers,
+      timeout,
+      agent
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(url, options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+            return;
+          }
+
+          try {
+            const contentType = String(res.headers['content-type'] || '').toLowerCase();
+            const isSse = contentType.includes('text/event-stream') || String(data).includes('\ndata: ');
+            if (isSse) {
+              const parsed = this.parseSSEToJson(data);
+              if (!parsed) {
+                const sample = String(data || '').slice(0, 800);
+                logger.warn('Unable to parse SSE provider response', {
+                  provider: this.getCurrentProvider(),
+                  contentType,
+                  sample
+                });
+                reject(new Error('Failed to parse SSE provider response'));
+                return;
+              }
+              resolve(parsed);
+              return;
+            }
+
+            resolve(JSON.parse(data));
+          } catch (parseError) {
+            reject(new Error(`Failed to parse provider response: ${parseError.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => reject(new Error(`Provider request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Provider request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  parseSSEToJson(sseText) {
     try {
-      const startTime = Date.now();
-      await this.testNetworkConnection({ 
-        host: 'generativelanguage.googleapis.com', 
-        port: 443, 
-        name: 'Gemini API Endpoint' 
-      });
-      const latency = Date.now() - startTime;
-      
-      logger.debug('Preflight check passed', { latency });
+      const raw = String(sseText || '').trim();
+      if (!raw) return null;
+
+      // Some providers may still return plain JSON even when stream is requested.
+      if (raw.startsWith('{')) {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          // continue with SSE parsing
+        }
+      }
+
+      const lines = raw.split(/\r?\n/);
+      let deltaText = '';
+      let snapshotText = '';
+      let finalResponse = null;
+
+      const mergeChunk = (current, incoming) => {
+        const next = String(incoming || '');
+        if (!next) return current;
+        if (!current) return next;
+
+        // Some SSE variants send cumulative chunks; replace instead of append.
+        if (next.startsWith(current)) return next;
+
+        // Ignore exact duplicate chunk.
+        if (current.endsWith(next)) return current;
+
+        return current + next;
+      };
+
+      const extractSnapshotText = (event) => {
+        if (typeof event?.response?.output_text === 'string' && event.response.output_text.trim()) {
+          return event.response.output_text.trim();
+        }
+        if (typeof event?.output_text === 'string' && event.output_text.trim()) {
+          return event.output_text.trim();
+        }
+
+        const content = Array.isArray(event?.item?.content) ? event.item.content : [];
+        const parts = content
+          .map((part) => {
+            if (typeof part?.output_text === 'string') return part.output_text;
+            if (typeof part?.text === 'string') return part.text;
+            return '';
+          })
+          .filter(Boolean);
+
+        return parts.join(' ').trim();
+      };
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+
+        const jsonPart = trimmed.slice(5).trim();
+        if (!jsonPart || jsonPart === '[DONE]') continue;
+
+        let event;
+        try {
+          event = JSON.parse(jsonPart);
+        } catch {
+          continue;
+        }
+
+        const eventType = String(event?.type || '');
+
+        if (eventType === 'response.done' || eventType === 'response.completed') {
+          if (event.response && typeof event.response === 'object') {
+            finalResponse = event.response;
+          } else if (!finalResponse && typeof event === 'object') {
+            finalResponse = event;
+          }
+          continue;
+        }
+
+        // Append only true delta chunks to avoid duplicating snapshot text.
+        if (eventType.includes('delta') && typeof event?.delta === 'string') {
+          deltaText = mergeChunk(deltaText, event.delta);
+          continue;
+        }
+
+        const snapshot = extractSnapshotText(event);
+        if (snapshot && snapshot.length > snapshotText.length) {
+          snapshotText = snapshot;
+        }
+      }
+
+      const finalText = (deltaText.trim() || snapshotText.trim());
+
+      if (finalResponse && typeof finalResponse === 'object') {
+        const hasTopLevelText = typeof finalResponse.output_text === 'string' && finalResponse.output_text.trim();
+        const hasOutputItems = Array.isArray(finalResponse.output) && finalResponse.output.length > 0;
+
+        if (!hasTopLevelText && !hasOutputItems && finalText) {
+          finalResponse.output_text = finalText;
+          finalResponse.output = [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'output_text', text: finalText }]
+            }
+          ];
+        }
+
+        return finalResponse;
+      }
+
+      if (!finalText) return null;
+
+      return {
+        output_text: finalText,
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: finalText }]
+          }
+        ]
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  extractProviderText(response, provider) {
+    if (provider === 'codex') {
+      return this.extractCodexResponseText(response);
+    }
+
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
+
+    if (normalizedProvider === 'openai') {
+      const content = response?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('No text in OpenAI response');
+      if (Array.isArray(content)) {
+        const text = content
+          .filter(part => part?.type === 'text' && typeof part.text === 'string')
+          .map(part => part.text)
+          .join('\n')
+          .trim();
+        if (!text) throw new Error('No text in OpenAI response content array');
+        return text;
+      }
+      return String(content).trim();
+    }
+
+    if (normalizedProvider === 'anthropic') {
+      const content = Array.isArray(response?.content) ? response.content : [];
+      const text = content.filter(item => item.type === 'text').map(item => item.text).join('\n').trim();
+      if (!text) throw new Error('No text in Anthropic response');
+      return text;
+    }
+
+    const { text } = this.extractTextFromCandidates(response);
+    return text;
+  }
+
+  extractCodexResponseText(response) {
+    const payload = response?.response || response || {};
+    const output = Array.isArray(payload?.output) ? payload.output : [];
+
+    const normalize = (value) => String(value || '').replace(/\r\n/g, '\n').trim();
+
+    // Prefer top-level output_text first to avoid double-counting the same text.
+    if (Array.isArray(payload?.output_text)) {
+      const topLevel = payload.output_text
+        .map((chunk) => (typeof chunk === 'string' ? chunk : (chunk?.text || chunk?.value || '')))
+        .map(normalize)
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (topLevel) return topLevel;
+    } else {
+      const topLevel = normalize(payload?.output_text);
+      if (topLevel) return topLevel;
+    }
+
+    const candidates = [];
+    const seen = new Set();
+    const addCandidate = (value) => {
+      const text = normalize(value);
+      if (!text) return;
+      if (seen.has(text)) return;
+      seen.add(text);
+      candidates.push(text);
+    };
+
+    for (const item of output) {
+      addCandidate(item?.output_text);
+      const content = Array.isArray(item?.content) ? item.content : [];
+      for (const part of content) {
+        addCandidate(part?.output_text);
+        addCandidate(part?.text);
+        addCandidate(part?.refusal);
+        addCandidate(part?.output_text?.value);
+        addCandidate(part?.text?.value);
+      }
+    }
+
+    const text = candidates.join('\n').trim();
+    if (text) return text;
+
+    logger.warn('Codex response had no extractable text', {
+      provider: this.getCurrentProvider(),
+      keys: Object.keys(payload || {}),
+      outputCount: output.length,
+      sample: JSON.stringify(payload).slice(0, 1200)
+    });
+
+    throw new Error('No text in Codex response');
+  }
+
+  getCodexAccountIdFromToken(token) {
+    try {
+      const jwt = String(token || '').trim();
+      const parts = jwt.split('.');
+      if (parts.length < 2) return null;
+
+      const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+      const decoded = Buffer.from(padded, 'base64').toString('utf8');
+      const claims = JSON.parse(decoded);
+
+      return claims?.['https://api.openai.com/auth']?.chatgpt_account_id || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async performPreflightCheck() {
+    try {
+      const provider = this.getCurrentProvider();
+      const host = provider === 'codex'
+        ? 'chatgpt.com'
+        : provider === 'openai'
+          ? 'api.openai.com'
+          : provider === 'anthropic'
+            ? 'api.anthropic.com'
+            : 'generativelanguage.googleapis.com';
+      await this.testNetworkConnection({ host, port: 443, name: `${provider} API Endpoint` });
     } catch (error) {
-      logger.warn('Preflight check failed', { 
+      logger.warn('Preflight check failed', {
         error: error.message,
-        suggestion: 'Network connectivity issue detected before API call'
+        provider: this.getCurrentProvider()
       });
-      // Don't throw here - let the actual API call fail with more detail
     }
   }
 
@@ -867,7 +1548,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
       return {
         type: 'AUTH_ERROR',
         isNetworkError: false,
-        suggestedAction: 'Verify Gemini API key configuration'
+        suggestedAction: `Verify ${this.getProviderDisplayName()} credentials configuration`
       };
     }
     
@@ -946,49 +1627,96 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     });
   }
 
-  generateFallbackResponse(text, activeSkill) {
-    logger.info('Generating fallback response', { activeSkill });
+  generateFallbackResponse(text, activeSkill, error = null) {
+    const provider = this.getCurrentProvider();
+    const providerName = this.getProviderDisplayName(provider);
+    const errorAnalysis = error ? this.analyzeError(error) : { type: 'UNKNOWN_ERROR' };
+    const errorMessage = String(error?.message || '').toLowerCase();
+
+    logger.info('Generating fallback response', {
+      activeSkill,
+      provider,
+      errorType: errorAnalysis.type
+    });
+
+    let defaultMessage = `I can help analyze this content. ${providerName} request failed. Please try again.`;
+
+    if (errorMessage.includes('insufficient_quota') || errorMessage.includes('exceeded your current quota')) {
+      defaultMessage = `${providerName} quota exceeded. Add credits/billing on your provider account or switch to another provider in Settings.`;
+    } else if (errorAnalysis.type === 'AUTH_ERROR') {
+      defaultMessage = `${providerName} authentication failed. Please reconnect login/API key in Settings and try again.`;
+    } else if (errorAnalysis.type === 'NETWORK_ERROR' || errorAnalysis.type === 'TIMEOUT_ERROR') {
+      defaultMessage = `${providerName} network request failed. Check connection and retry.`;
+    }
 
     const fallbackResponses = {
-      'dsa': 'This appears to be a data structures and algorithms problem. Consider breaking it down into smaller components and identifying the appropriate algorithm or data structure to use.',
+      dsa: 'This appears to be a data structures and algorithms problem. Consider breaking it down into smaller components and identifying the appropriate algorithm or data structure to use.',
       'system-design': 'For this system design question, consider scalability, reliability, and the trade-offs between different architectural approaches.',
-      'programming': 'This looks like a programming challenge. Focus on understanding the requirements, edge cases, and optimal time/space complexity.',
-      'default': 'I can help analyze this content. Please ensure your Gemini API key is properly configured for detailed analysis.'
+      programming: 'This looks like a programming challenge. Focus on understanding the requirements, edge cases, and optimal time/space complexity.',
+      default: defaultMessage
     };
 
     const response = fallbackResponses[activeSkill] || fallbackResponses.default;
-    
+
     return {
       response,
       metadata: {
         skill: activeSkill,
+        provider,
+        authMode: this.getProviderAuthMode(provider),
         processingTime: 0,
         requestId: this.requestCount,
-        usedFallback: true
+        usedFallback: true,
+        errorType: errorAnalysis.type
       }
     };
   }
 
-  generateIntelligentFallbackResponse(text, activeSkill) {
-    logger.info('Generating intelligent fallback response for transcription', { activeSkill });
+  generateIntelligentFallbackResponse(text, activeSkill, error = null) {
+    const provider = this.getCurrentProvider();
+    const providerName = this.getProviderDisplayName(provider);
+    const errorAnalysis = error ? this.analyzeError(error) : { type: 'UNKNOWN_ERROR' };
+    const errorMessage = String(error?.message || '').toLowerCase();
+
+    logger.info('Generating intelligent fallback response for transcription', {
+      activeSkill,
+      provider,
+      errorType: errorAnalysis.type
+    });
+
+    if (errorMessage.includes('insufficient_quota') || errorMessage.includes('exceeded your current quota')) {
+      return {
+        response: `${providerName} quota exceeded. Add credits/billing on your provider account or switch provider in Settings.`,
+        metadata: {
+          skill: activeSkill,
+          provider,
+          authMode: this.getProviderAuthMode(provider),
+          processingTime: 0,
+          requestId: this.requestCount,
+          usedFallback: true,
+          isTranscriptionResponse: true,
+          errorType: errorAnalysis.type
+        }
+      };
+    }
 
     // Simple heuristic to determine if message seems skill-related
     const skillKeywords = {
-      'dsa': ['algorithm', 'data structure', 'array', 'tree', 'graph', 'sort', 'search', 'complexity', 'big o'],
-      'programming': ['code', 'function', 'variable', 'class', 'method', 'bug', 'debug', 'syntax'],
+      dsa: ['algorithm', 'data structure', 'array', 'tree', 'graph', 'sort', 'search', 'complexity', 'big o'],
+      programming: ['code', 'function', 'variable', 'class', 'method', 'bug', 'debug', 'syntax'],
       'system-design': ['scalability', 'database', 'architecture', 'microservice', 'load balancer', 'cache'],
-      'behavioral': ['interview', 'experience', 'situation', 'leadership', 'conflict', 'team'],
-      'sales': ['customer', 'deal', 'negotiation', 'price', 'revenue', 'prospect'],
-      'presentation': ['slide', 'audience', 'public speaking', 'presentation', 'nervous'],
+      behavioral: ['interview', 'experience', 'situation', 'leadership', 'conflict', 'team'],
+      sales: ['customer', 'deal', 'negotiation', 'price', 'revenue', 'prospect'],
+      presentation: ['slide', 'audience', 'public speaking', 'presentation', 'nervous'],
       'data-science': ['data', 'model', 'machine learning', 'statistics', 'analytics', 'python', 'pandas'],
-      'devops': ['deployment', 'ci/cd', 'docker', 'kubernetes', 'infrastructure', 'monitoring'],
-      'negotiation': ['negotiate', 'compromise', 'agreement', 'terms', 'conflict resolution']
+      devops: ['deployment', 'ci/cd', 'docker', 'kubernetes', 'infrastructure', 'monitoring'],
+      negotiation: ['negotiate', 'compromise', 'agreement', 'terms', 'conflict resolution']
     };
 
-    const textLower = text.toLowerCase();
+    const textLower = String(text || '').toLowerCase();
     const relevantKeywords = skillKeywords[activeSkill] || [];
     const hasRelevantKeywords = relevantKeywords.some(keyword => textLower.includes(keyword));
-    
+
     // Check for question indicators
     const questionIndicators = ['how', 'what', 'why', 'when', 'where', 'can you', 'could you', 'should i', '?'];
     const seemsLikeQuestion = questionIndicators.some(indicator => textLower.includes(indicator));
@@ -999,15 +1727,18 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     } else {
       response = `Yeah, I'm listening. Ask your question relevant to ${activeSkill}.`;
     }
-    
+
     return {
       response,
       metadata: {
         skill: activeSkill,
+        provider,
+        authMode: this.getProviderAuthMode(provider),
         processingTime: 0,
         requestId: this.requestCount,
         usedFallback: true,
-        isTranscriptionResponse: true
+        isTranscriptionResponse: true,
+        errorType: errorAnalysis.type
       }
     };
   }
@@ -1018,166 +1749,81 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     }
 
     try {
-      // First check network connectivity
       const networkCheck = await this.checkNetworkConnectivity();
-      const hasNetworkIssues = networkCheck.tests.some(test => !test.success);
-      
-      if (hasNetworkIssues) {
-        logger.warn('Network connectivity issues detected', networkCheck);
-      }
-
-      const testRequest = {
-        contents: [{
-          role: 'user',
-          parts: [{ text: 'Test connection. Please respond with "OK".' }]
-        }]
-      };
-
-      this.applyGenerationDefaults(testRequest, { temperature: 0, maxOutputTokens: 10 });
+      const testRequest = { contents: [{ role: 'user', parts: [{ text: 'Test connection. Please respond with "OK".' }] }] };
+      this.applyGenerationDefaults(testRequest, { temperature: 0, maxOutputTokens: 24 });
 
       const startTime = Date.now();
-      const result = await this.model.generateContent(testRequest);
+      const response = await this.executeRequest(testRequest);
       const latency = Date.now() - startTime;
-      const { text } = this.extractTextFromCandidates(result.response);
-      
-      logger.info('Connection test successful', { 
-        response: text, 
+
+      return {
+        success: true,
+        response,
         latency,
-        networkCheck: hasNetworkIssues ? 'issues_detected' : 'healthy'
-      });
-      
-      return { 
-        success: true, 
-        response: text,
-        latency,
+        provider: this.getCurrentProvider(),
+        model: this.getCurrentModel(),
         networkConnectivity: networkCheck
       };
     } catch (error) {
-      const errorAnalysis = this.analyzeError(error);
-      logger.error('Connection test failed', { 
+      return {
+        success: false,
         error: error.message,
-        errorAnalysis
-      });
-      
-      return { 
-        success: false, 
-        error: error.message,
-        errorAnalysis,
+        provider: this.getCurrentProvider(),
+        model: this.getCurrentModel(),
         networkConnectivity: await this.checkNetworkConnectivity().catch(() => null)
       };
     }
   }
 
-  updateApiKey(newApiKey) {
-    process.env.GEMINI_API_KEY = newApiKey;
+  updateApiKey(newApiKey, provider = this.getCurrentProvider()) {
+    const envKeyMap = {
+      gemini: 'GEMINI_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      anthropic: 'ANTHROPIC_API_KEY'
+    };
+    const envKey = envKeyMap[provider] || 'GEMINI_API_KEY';
+    process.env[envKey] = String(newApiKey || '').trim();
     this.isInitialized = false;
     this.initializeClient();
-    
-    logger.info('API key updated and client reinitialized');
+    logger.info('Provider API key updated and client reinitialized', { provider });
+  }
+
+  updateProviderModel(provider, model) {
+    const requestedProvider = provider || this.getCurrentProvider();
+    const providerModels = config.get(`llm.providers.${requestedProvider}.models`) || [];
+    const hasRequestedModel = !!model && providerModels.includes(model);
+
+    this.provider = requestedProvider;
+    this.modelName = hasRequestedModel
+      ? model
+      : this.getProviderDefaultModel(requestedProvider);
+
+    config.set('llm.provider', this.provider);
+    config.set('llm.model', this.modelName);
+    this.isInitialized = false;
+    this.initializeClient();
   }
 
   getStats() {
+    const provider = this.getCurrentProvider();
     return {
       isInitialized: this.isInitialized,
+      provider,
+      providerDisplayName: this.getProviderDisplayName(provider),
+      model: this.getCurrentModel(),
+      hasApiKey: !!this.getProviderApiKey(provider),
+      authMode: this.getProviderAuthMode(provider),
+      authModes: this.getAuthModes(),
       requestCount: this.requestCount,
       errorCount: this.errorCount,
       successRate: this.requestCount > 0 ? ((this.requestCount - this.errorCount) / this.requestCount) * 100 : 0,
-      config: config.get('llm.gemini')
+      providers: config.get('llm.providers') || {}
     };
   }
 
   delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  async executeAlternativeRequest(geminiRequest) {
-    const https = require('https');
-    const apiKey = config.getApiKey('GEMINI');
-    const model = config.get('llm.gemini.model');
-    
-    logger.info('Using alternative HTTPS request method');
-    
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    
-    const postData = JSON.stringify(geminiRequest);
-    
-    const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
-
-    const options = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-        'Content-Length': Buffer.byteLength(postData),
-        'User-Agent': this.getUserAgent()
-      },
-      timeout: config.get('llm.gemini.timeout'),
-      agent
-    };
-
-    return new Promise((resolve, reject) => {
-      const req = https.request(url, options, (res) => {
-        let data = '';
-        
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        res.on('end', () => {
-          try {
-            if (res.statusCode !== 200) {
-              reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-              return;
-            }
-            
-            const response = JSON.parse(data);
-            
-            logger.debug('Alternative request response structure', {
-              hasResponse: !!response,
-              hasCandidates: !!response.candidates,
-              candidatesLength: response.candidates?.length,
-              responseKeys: Object.keys(response || {}),
-              firstCandidateKeys: response.candidates?.[0] ? Object.keys(response.candidates[0]) : []
-            });
-
-            const { text, finishReason } = this.extractTextFromCandidates(response);
-
-            if (finishReason === 'MAX_TOKENS') {
-              logger.warn('Gemini alternative response reached max tokens limit', {
-                finishReason
-              });
-            }
-            
-            logger.info('Alternative request successful', {
-              responseLength: text.length,
-              statusCode: res.statusCode,
-              finishReason
-            });
-            
-            resolve(text.trim());
-          } catch (parseError) {
-            logger.error('Failed to parse alternative response', {
-              error: parseError.message,
-              rawResponse: data.substring(0, 500),
-              statusCode: res.statusCode
-            });
-            reject(new Error(`Failed to parse response: ${parseError.message}`));
-          }
-        });
-      });
-      
-      req.on('error', (error) => {
-        reject(new Error(`Alternative request failed: ${error.message}`));
-      });
-      
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Alternative request timeout'));
-      });
-      
-      req.write(postData);
-      req.end();
-    });
   }
 }
 

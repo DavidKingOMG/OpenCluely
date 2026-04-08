@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STT Diagnostics</title>
+  <link href="./src/styles/common.css" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .diag-shell {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(145deg, rgba(10, 15, 20, 0.82) 0%, rgba(20, 30, 35, 0.76) 100%);
+      border: 1px solid rgba(180, 230, 210, 0.18);
+      border-radius: 12px;
+      color: rgba(238, 250, 245, 0.94);
+      display: flex;
+      flex-direction: column;
+      backdrop-filter: blur(18px);
+    }
+
+    .diag-header {
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      border-bottom: 1px solid rgba(180, 230, 210, 0.14);
+      -webkit-app-region: drag;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .diag-actions {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .diag-btn {
+      border: 1px solid rgba(180, 230, 210, 0.24);
+      border-radius: 8px;
+      background: rgba(25, 45, 40, 0.55);
+      color: rgba(238, 250, 245, 0.9);
+      font-size: 11px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .diag-body {
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-y: auto;
+      -webkit-app-region: no-drag;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="diag-shell">
+    <div class="diag-header">
+      <span>STT Diagnostics</span>
+      <div class="diag-actions">
+        <button id="refreshBtn" class="diag-btn" type="button">Refresh</button>
+        <button id="closeBtn" class="diag-btn" type="button">Close</button>
+      </div>
+    </div>
+    <div class="diag-body" id="diagContent">Loading diagnostics...</div>
+  </div>
+
+  <script src="./src/ui/stt-diagnostics-window.js"></script>
+</body>
+</html>

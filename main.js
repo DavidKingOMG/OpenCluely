@@ -1,5 +1,8 @@
 require("dotenv").config();
 
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
 const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
@@ -17,10 +20,21 @@ const sessionManager = require("./src/managers/session.manager");
 class ApplicationController {
   constructor() {
     this.isReady = false;
-    this.activeSkill = "dsa";
+    this.activeSkill = "general";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
+    this.speechProvider = 'azure';
+    this.whisperModel = process.env.WHISPER_MODEL || 'ggml-base.en.bin';
+    this.whisperIntervalMs = Number(process.env.WHISPER_INTERVAL_MS || 2000);
+    this.whisperAudioSource = process.env.WHISPER_AUDIO_SOURCE || 'microphone';
+    this.whisperCaptureDevice = process.env.WHISPER_CAPTURE_DEVICE || 'auto';
+    this.oauthCallbackServer = null;
+    this.oauthCallbackServerReadyPromise = null;
+    this.pendingCodexOAuth = null;
+    this.codexCallbackPort = null;
+    this._oauthRetriedWithEphemeral = false;
+
 
     // Window configurations for reference
     this.windowConfigs = {
@@ -40,8 +54,9 @@ class ApplicationController {
     }
 
     // Set default stealth app name early
-    app.setName("Terminal "); // Default to Terminal stealth mode
-    process.title = "Terminal ";
+    app.setName("Terminal"); // Default to Terminal stealth mode
+    process.title = "Terminal";
+
 
     if (
       process.platform === "darwin" &&
@@ -64,8 +79,9 @@ class ApplicationController {
 
   async onAppReady() {
     // Force stealth mode IMMEDIATELY when app is ready
-    app.setName("Terminal ");
-    process.title = "Terminal ";
+    app.setName("Terminal");
+    process.title = "Terminal";
+
 
     logger.info("Application starting", {
       version: config.get("app.version"),
@@ -76,6 +92,8 @@ class ApplicationController {
     });
 
     try {
+      this.loadPersistedSettings();
+      await this.applySpeechProvider(this.speechProvider);
       this.setupPermissions();
       this.setupNetworkConfiguration();
 
@@ -84,6 +102,7 @@ class ApplicationController {
 
       await windowManager.initializeWindows();
       this.setupGlobalShortcuts();
+
 
       // Initialize default stealth mode with terminal icon
       this.updateAppIcon("terminal");
@@ -96,6 +115,7 @@ class ApplicationController {
       });
 
       sessionManager.addEvent("Application started");
+      this.promptForLlmSetupIfNeeded();
     } catch (error) {
       logger.error("Application initialization failed", {
         error: error.message,
@@ -108,24 +128,24 @@ class ApplicationController {
     // Configure session to handle network requests better
     const ses = session.defaultSession;
     
-    // Allow HTTPS requests to Google APIs
+    const llmHosts = new Set(['generativelanguage.googleapis.com', 'api.openai.com', 'api.anthropic.com']);
+
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      if (details.url.includes('generativelanguage.googleapis.com')) {
-        details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
-      }
+      try {
+        const hostname = new URL(details.url).hostname;
+        if (llmHosts.has(hostname)) {
+          details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
+        }
+      } catch (_) {}
       callback({ requestHeaders: details.requestHeaders });
     });
-    
-    // Handle certificate errors for Google APIs
+
+    // Keep default TLS verification; forcing cert outcomes causes intermittent SSL failures.
     ses.setCertificateVerifyProc((request, callback) => {
-      if (request.hostname === 'generativelanguage.googleapis.com') {
-        callback(0); // Trust Google's certificates
-      } else {
-        callback(-2); // Use default verification
-      }
+      callback(-3);
     });
-    
-    logger.debug('Network configuration applied for Gemini API');
+
+    logger.debug('Network configuration applied for LLM providers');
   }
 
   setupPermissions() {
@@ -232,6 +252,15 @@ class ApplicationController {
   }
 
   setupIPCHandlers() {
+  ipcMain.handle("get-available-skills", () => {
+      try {
+        const { promptLoader } = require("./prompt-loader");
+        return promptLoader.getAvailableSkills();
+      } catch (error) {
+        logger.error("Failed to get available skills", { error: error.message });
+        return ["general", "dsa", "programming"];
+      }
+  });
   ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
@@ -404,14 +433,77 @@ class ApplicationController {
       }
     });
 
-    ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
-      llmService.updateApiKey(apiKey);
+    ipcMain.handle("set-llm-provider-config", (event, payload = {}) => {
+      const provider = payload.provider || config.get('llm.provider') || 'gemini';
+      const providerModels = config.get(`llm.providers.${provider}.models`) || [];
+      const requestedModel = payload.model || config.get('llm.model') || null;
+      const model = providerModels.includes(requestedModel) ? requestedModel : (providerModels[0] || requestedModel);
+      const apiKey = payload.apiKey;
+      const authMode = provider === 'codex' ? 'oauth' : 'apiKey';
+
+      if (model || provider) {
+        llmService.updateProviderModel(provider, model);
+      }
+      llmService.setProviderAuthMode(provider, authMode);
+      if (typeof apiKey === 'string' && apiKey.trim()) {
+        llmService.updateApiKey(apiKey, provider);
+      }
+
+      this.saveSettings({
+        llmProvider: provider,
+        llmModel: llmService.getCurrentModel(),
+        llmAuthModes: llmService.getAuthModes(),
+        firstRunCompleted: true
+      });
       return llmService.getStats();
     });
 
-    ipcMain.handle("get-gemini-status", () => {
+    ipcMain.handle("get-llm-status", () => llmService.getStats());
+    ipcMain.handle("get-llm-providers", () => config.get('llm.providers') || {});
+    ipcMain.handle("start-codex-login", async (event, payload = {}) => {
+      const requestPayload = (payload && typeof payload === 'object') ? payload : {};
+      const mode = String(requestPayload.mode || 'open').toLowerCase();
+      const openBrowser = mode !== 'copy';
+
+      const callbackInfo = await this.startCodexOAuthCallbackServer();
+
+      const result = await llmService.startCodexLoginFlow({
+        openBrowser,
+        redirectUri: callbackInfo?.redirectUri
+      });
+
+      if (result?.success) {
+        this.pendingCodexOAuth = {
+          state: result.state,
+          verifier: result.verifier,
+          clientId: result.clientId,
+          redirectUri: result.redirectUri,
+          createdAt: Date.now()
+        };
+      }
+
+      return result;
+    });
+    ipcMain.handle("set-codex-auth-token", (event, payload = {}) => {
+      const token = payload.token || '';
+      if (!token.trim()) {
+        return { success: false, error: 'Missing OAuth token' };
+      }
+      llmService.setProviderAuthMode('openai', 'oauth');
+      llmService.setCodexAuthToken(token.trim());
+      this.saveSettings({ llmAuthModes: llmService.getAuthModes(), firstRunCompleted: true });
+      return { success: true, status: llmService.getStats() };
+    });
+
+    // Backward-compatible aliases
+    ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
+      llmService.updateProviderModel('gemini', llmService.getCurrentModel());
+      llmService.updateApiKey(apiKey, 'gemini');
+      this.saveSettings({ llmProvider: 'gemini', llmModel: llmService.getCurrentModel(), firstRunCompleted: true });
       return llmService.getStats();
     });
+
+    ipcMain.handle("get-gemini-status", () => llmService.getStats());
 
     // Window binding IPC handlers
     ipcMain.handle("set-window-binding", (event, enabled) => {
@@ -430,7 +522,33 @@ class ApplicationController {
       return windowManager.getWindowStats();
     });
 
+    ipcMain.handle("open-stt-diagnostics", () => {
+      windowManager.showSTTDiagnostics();
+      return { success: true };
+    });
+
+    ipcMain.handle("close-stt-diagnostics", () => {
+      windowManager.hideSTTDiagnostics();
+      return { success: true };
+    });
+
+    ipcMain.handle("get-stt-diagnostics", () => {
+      if (typeof speechService.getSTTDiagnostics !== 'function') {
+        return { error: 'STT diagnostics unavailable' };
+      }
+      return speechService.getSTTDiagnostics();
+    });
+
+    ipcMain.handle("get-whisper-capture-devices", (event, source = 'microphone') => {
+      if (typeof speechService.getWhisperCaptureDevices !== 'function') {
+        return [];
+      }
+      return speechService.getWhisperCaptureDevices(source);
+    });
+
+ 
     ipcMain.handle("set-window-gap", (event, gap) => {
+
       return windowManager.setWindowGap(gap);
     });
 
@@ -439,15 +557,15 @@ class ApplicationController {
       return windowManager.getWindowBindingStatus();
     });
 
-    ipcMain.handle("test-gemini-connection", async () => {
+    ipcMain.handle("test-llm-connection", async () => {
       return await llmService.testConnection();
     });
 
-    ipcMain.handle("run-gemini-diagnostics", async () => {
+    ipcMain.handle("run-llm-diagnostics", async () => {
       try {
         const connectivity = await llmService.checkNetworkConnectivity();
         const apiTest = await llmService.testConnection();
-        
+
         return {
           success: true,
           connectivity,
@@ -460,6 +578,18 @@ class ApplicationController {
           error: error.message,
           timestamp: new Date().toISOString()
         };
+      }
+    });
+
+    // Backward-compatible aliases
+    ipcMain.handle("test-gemini-connection", async () => llmService.testConnection());
+    ipcMain.handle("run-gemini-diagnostics", async () => {
+      try {
+        const connectivity = await llmService.checkNetworkConnectivity();
+        const apiTest = await llmService.testConnection();
+        return { success: true, connectivity, apiTest, timestamp: new Date().toISOString() };
+      } catch (error) {
+        return { success: false, error: error.message, timestamp: new Date().toISOString() };
       }
     });
 
@@ -587,7 +717,24 @@ class ApplicationController {
     });
   }
 
+  async applySpeechProvider(provider) {
+    const selectedProvider = String(provider || this.speechProvider || 'azure').trim();
+    this.speechProvider = selectedProvider;
+    process.env.STT_PROVIDER = selectedProvider;
+
+    try {
+      const result = await speechService.setProvider(selectedProvider);
+      this.speechAvailable = speechService.isAvailable ? speechService.isAvailable() : false;
+      windowManager.broadcastToAllWindows('speech-availability', { available: this.speechAvailable });
+      return { success: true, ...result, available: this.speechAvailable };
+    } catch (error) {
+      logger.error('Failed to apply speech provider', { provider: selectedProvider, error: error.message });
+      return { success: false, provider: selectedProvider, error: error.message };
+    }
+  }
+
   toggleSpeechRecognition() {
+
     const isAvailable = typeof speechService.isAvailable === 'function' ? speechService.isAvailable() : !!speechService.getStatus?.().isInitialized;
     if (!isAvailable) {
       logger.warn("Speech recognition unavailable; toggle ignored");
@@ -627,7 +774,190 @@ class ApplicationController {
     }
   }
 
+  promptForLlmSetupIfNeeded() {
+    const status = llmService.getStats();
+    const shouldPrompt = !this.firstRunCompleted || !status.isInitialized || !status.hasApiKey;
+
+    if (!shouldPrompt) {
+      this.firstRunCompleted = true;
+      this.persistSettings({ firstRunCompleted: true });
+      return;
+    }
+
+    const mainWindow = windowManager.getWindow('main');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('open-llm-config', {
+        provider: status.provider,
+        model: status.model,
+        hasApiKey: status.hasApiKey,
+        providers: status.providers,
+        authModes: status.authModes || {}
+      });
+    }
+  }
+
+  startCodexOAuthCallbackServer() {
+    if (this.oauthCallbackServerReadyPromise) {
+      return this.oauthCallbackServerReadyPromise;
+    }
+
+    if (this.oauthCallbackServer && this.codexCallbackPort) {
+      return Promise.resolve({
+        callbackPort: this.codexCallbackPort,
+        redirectUri: process.env.CODEX_REDIRECT_URI || `http://127.0.0.1:${this.codexCallbackPort}/auth/callback`
+      });
+    }
+
+    const callbackPath = '/auth/callback';
+    const requestedPort = Number(process.env.CODEX_CALLBACK_PORT || 1455);
+
+    this.oauthCallbackServer = http.createServer(async (req, res) => {
+      try {
+        const activePort = this.codexCallbackPort || requestedPort;
+        const rawRequestUrl = String(req.url || '/');
+        const requestUrl = new URL(rawRequestUrl, `http://localhost:${activePort}`);
+        const normalizedPath = String(requestUrl.pathname || '/').replace(/\/+$/, '') || '/';
+
+        // Parse query from raw request URL first to avoid runtime URL/searchParams edge cases.
+        const queryIndex = rawRequestUrl.indexOf('?');
+        const rawQuery = queryIndex >= 0 ? rawRequestUrl.slice(queryIndex + 1) : '';
+        const params = new URLSearchParams(rawQuery);
+
+        const code = (params.get('code') || '').trim();
+        const state = (params.get('state') || '').trim();
+        const directToken = (
+          params.get('token') ||
+          params.get('access_token') ||
+          params.get('id_token') ||
+          ''
+        ).trim();
+
+        const hasOAuthPayload = !!(code || directToken || state);
+        if (!hasOAuthPayload) {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end(`<!doctype html><html><body style="font-family:sans-serif;padding:24px;background:#111;color:#eee;"><h3>Completing login...</h3><p>Processing OAuth callback.</p><script>(function(){try{var h=window.location.hash||'';if(h&&h.length>1){var p=new URLSearchParams(h.substring(1));var t=p.get('access_token')||p.get('id_token')||p.get('token')||'';if(t){var target=(window.location.pathname||'/auth/callback')+'?token='+encodeURIComponent(t);window.location.replace(target);return;}}document.body.innerHTML='<h3>Almost done</h3><p>No OAuth data found in callback URL.</p><p style=\"opacity:.8\">Path: '+(window.location.pathname||'')+'</p><p style=\"opacity:.8\">Query: '+(window.location.search||'')+'</p>';}catch(e){document.body.innerHTML='<h3>OAuth callback error</h3><p>Unable to parse callback.</p>';}})();</script></body></html>`);
+          return;
+        }
+
+        let token = directToken;
+        if (!token && code) {
+          const pending = this.pendingCodexOAuth;
+          if (!pending) {
+            throw new Error('No pending OAuth session found. Start login again.');
+          }
+          if (!state || state !== pending.state) {
+            throw new Error('OAuth state mismatch');
+          }
+
+          const tokenResponse = await llmService.exchangeCodexOAuthCode({
+            code,
+            codeVerifier: pending.verifier,
+            clientId: pending.clientId,
+            redirectUri: pending.redirectUri
+          });
+
+          token = String(
+            tokenResponse?.access_token ||
+            tokenResponse?.id_token ||
+            tokenResponse?.token ||
+            ''
+          ).trim();
+
+          if (!token) {
+            throw new Error('OAuth token exchange succeeded but no access_token returned');
+          }
+        }
+
+        llmService.setProviderAuthMode('openai', 'oauth');
+        llmService.setProviderAuthMode('codex', 'oauth');
+        llmService.setCodexAuthToken(token);
+
+        const llmStats = llmService.getStats();
+        this.saveSettings({
+          llmProvider: 'codex',
+          llmModel: llmStats.model,
+          llmAuthModes: llmService.getAuthModes(),
+          firstRunCompleted: true
+        });
+
+        this.pendingCodexOAuth = null;
+        windowManager.broadcastToAllWindows('codex-auth-token-updated', {
+          provider: 'codex',
+          authMode: 'oauth'
+        });
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end(`<!doctype html><html><body style="font-family:sans-serif;padding:24px;background:#111;color:#eee;"><h3>Login successful</h3><p>You can close this tab and return to OpenCluely.</p></body></html>`);
+      } catch (error) {
+        logger.error('OAuth callback processing failed', { error: error.message });
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end(`<!doctype html><html><body style="font-family:sans-serif;padding:24px;background:#111;color:#eee;"><h3>OAuth callback failed</h3><p>${String(error.message || 'Unknown error')}</p></body></html>`);
+      }
+    });
+
+    this.oauthCallbackServerReadyPromise = new Promise((resolve, reject) => {
+      const listenOn = (port) => {
+        this.oauthCallbackServer.listen(port, () => {
+          const addr = this.oauthCallbackServer.address();
+          const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+          this.codexCallbackPort = actualPort;
+          process.env.CODEX_REDIRECT_URI = `http://localhost:${actualPort}${callbackPath}`;
+          logger.info('Codex OAuth callback server listening', { callbackPort: actualPort, callbackPath });
+          resolve({
+            callbackPort: actualPort,
+            redirectUri: process.env.CODEX_REDIRECT_URI
+          });
+        });
+      };
+
+      this.oauthCallbackServer.on('error', (error) => {
+        if (error && error.code === 'EADDRINUSE' && !this._oauthRetriedWithEphemeral) {
+          this._oauthRetriedWithEphemeral = true;
+          logger.warn('Codex callback port in use; retrying with ephemeral port', { requestedPort, error: error.message });
+          try {
+            this.oauthCallbackServer.close();
+          } catch (_) {}
+          listenOn(0);
+          return;
+        }
+
+        logger.error('Failed to start Codex OAuth callback server', { error: error.message });
+        this.oauthCallbackServer = null;
+        this.oauthCallbackServerReadyPromise = null;
+        reject(error);
+      });
+
+      this._oauthRetriedWithEphemeral = false;
+      this.codexCallbackPort = requestedPort;
+      listenOn(requestedPort);
+    });
+
+    return this.oauthCallbackServerReadyPromise;
+  }
+
+  stopCodexOAuthCallbackServer() {
+    if (!this.oauthCallbackServer) {
+      return;
+    }
+
+    try {
+      this.oauthCallbackServer.close();
+    } catch (error) {
+      logger.warn('Failed to stop Codex OAuth callback server cleanly', { error: error.message });
+    } finally {
+      this.oauthCallbackServer = null;
+      this.oauthCallbackServerReadyPromise = null;
+      this.pendingCodexOAuth = null;
+      this.codexCallbackPort = null;
+      this._oauthRetriedWithEphemeral = false;
+    }
+  }
+
   handleUpArrow() {
+
     const isInteractive = windowManager.getWindowStats().isInteractive;
 
     if (isInteractive) {
@@ -672,9 +1002,8 @@ class ApplicationController {
   }
 
   navigateSkill(direction) {
-    const availableSkills = [
-      "dsa",
-    ];
+    const { promptLoader } = require("./prompt-loader");
+    const availableSkills = promptLoader.getAvailableSkills();
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
     if (currentIndex === -1) {
@@ -729,9 +1058,17 @@ class ApplicationController {
       }
 
       // Use image directly with LLM and active skill; do not send chat messages here
+      const llmStatus = llmService.getStats();
+      logger.info('Screenshot analysis using provider', {
+        provider: llmStatus.provider,
+        authMode: llmStatus.authMode,
+        model: llmStatus.model,
+        hasCredentials: llmStatus.hasApiKey
+      });
+
       const sessionHistory = sessionManager.getOptimizedHistory();
 
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       const llmResult = await llmService.processImageWithSkill(
@@ -784,7 +1121,7 @@ class ApplicationController {
       sessionManager.addUserInput(text, 'llm_input');
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
       
       const llmResult = await llmService.processTextWithSkill(
@@ -863,7 +1200,7 @@ class ApplicationController {
       });
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       const llmResult = await llmService.processTranscriptionWithIntelligentResponse(
@@ -1020,9 +1357,11 @@ class ApplicationController {
 
   onWillQuit() {
     globalShortcut.unregisterAll();
+    this.stopCodexOAuthCallbackServer();
     windowManager.destroyAllWindows();
 
     const sessionStats = sessionManager.getMemoryUsage();
+
     logger.info("Application shutting down", {
       sessionEvents: sessionStats.eventCount,
       sessionSize: sessionStats.approximateSize,
@@ -1031,12 +1370,21 @@ class ApplicationController {
 
   getSettings() {
     return {
-      codingLanguage: this.codingLanguage || "cpp", // Default to C++
-      activeSkill: this.activeSkill || "dsa",
+      codingLanguage: this.codingLanguage || "cpp",
+      activeSkill: this.activeSkill || "general",
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
-      // pass through env-derived settings for UI convenience (masked)
+      llmProvider: this.llmProvider || config.get('llm.provider') || 'gemini',
+      llmModel: this.llmModel || config.get('llm.model') || 'gemini-2.5-flash',
+      llmAuthModes: this.llmAuthModes || llmService.getAuthModes(),
+      firstRunCompleted: !!this.firstRunCompleted,
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
+      speechProvider: this.speechProvider || 'azure',
+      whisperModel: process.env.WHISPER_MODEL || this.whisperModel || 'ggml-base.en.bin',
+      whisperIntervalMs: Number(process.env.WHISPER_INTERVAL_MS || this.whisperIntervalMs || 2000),
+      whisperAudioSource: process.env.WHISPER_AUDIO_SOURCE || this.whisperAudioSource || 'microphone',
+      whisperCaptureDevice: process.env.WHISPER_CAPTURE_DEVICE || this.whisperCaptureDevice || 'auto',
+      whisperInstalled: !!speechService.getStatus?.().whisperReady,
       speechAvailable: this.speechAvailable
     };
   }
@@ -1062,14 +1410,91 @@ class ApplicationController {
         this.appIcon = settings.appIcon;
       }
 
+      if (settings.llmProvider || settings.llmModel) {
+        const provider = settings.llmProvider || this.llmProvider || config.get('llm.provider') || 'gemini';
+        const model = settings.llmModel || this.llmModel || config.get('llm.model') || null;
+        this.llmProvider = provider;
+        this.llmModel = model;
+        llmService.updateProviderModel(provider, model);
+      }
+
+      if (settings.llmAuthModes && typeof settings.llmAuthModes === 'object') {
+        this.llmAuthModes = settings.llmAuthModes;
+        llmService.setAuthModes(settings.llmAuthModes);
+      }
+
+      if (typeof settings.firstRunCompleted === 'boolean') {
+        this.firstRunCompleted = settings.firstRunCompleted;
+      }
+
+      if (typeof settings.azureKey === 'string') {
+        process.env.AZURE_SPEECH_KEY = settings.azureKey;
+      }
+
+      if (typeof settings.azureRegion === 'string') {
+        process.env.AZURE_SPEECH_REGION = settings.azureRegion;
+      }
+
+      let shouldReconfigureSpeech = false;
+
+      if (typeof settings.whisperModel === 'string' && settings.whisperModel.trim()) {
+        const requestedModel = settings.whisperModel.trim();
+        const allowedModels = new Set(['ggml-tiny.en.bin', 'ggml-base.en.bin', 'ggml-small.en.bin']);
+        const nextModel = allowedModels.has(requestedModel) ? requestedModel : 'ggml-small.en.bin';
+        if (nextModel !== this.whisperModel) {
+          this.whisperModel = nextModel;
+          shouldReconfigureSpeech = true;
+        }
+        process.env.WHISPER_MODEL = this.whisperModel;
+      }
+
+      if (settings.whisperIntervalMs !== undefined) {
+        const parsedInterval = Number(settings.whisperIntervalMs);
+        const nextInterval = Number.isFinite(parsedInterval) ? Math.max(600, parsedInterval) : 2000;
+        if (nextInterval !== this.whisperIntervalMs) {
+          this.whisperIntervalMs = nextInterval;
+          shouldReconfigureSpeech = true;
+        }
+        process.env.WHISPER_INTERVAL_MS = String(this.whisperIntervalMs);
+      }
+
+      if (typeof settings.whisperAudioSource === 'string' && settings.whisperAudioSource.trim()) {
+        const nextSource = settings.whisperAudioSource.trim();
+        if (nextSource !== this.whisperAudioSource) {
+          this.whisperAudioSource = nextSource;
+          shouldReconfigureSpeech = true;
+        }
+        process.env.WHISPER_AUDIO_SOURCE = this.whisperAudioSource;
+      }
+
+      if (typeof settings.whisperCaptureDevice === 'string' && settings.whisperCaptureDevice.trim()) {
+        const nextCapture = settings.whisperCaptureDevice.trim();
+        if (nextCapture !== this.whisperCaptureDevice) {
+          this.whisperCaptureDevice = nextCapture;
+          shouldReconfigureSpeech = true;
+        }
+        process.env.WHISPER_CAPTURE_DEVICE = this.whisperCaptureDevice;
+      }
+
+      if (typeof settings.speechProvider === 'string' && settings.speechProvider.trim()) {
+        const nextProvider = settings.speechProvider.trim();
+        if (nextProvider !== this.speechProvider) {
+          this.speechProvider = nextProvider;
+          shouldReconfigureSpeech = true;
+        }
+      }
+
+      if (shouldReconfigureSpeech) {
+        this.applySpeechProvider(this.speechProvider);
+      }
+
       // Handle icon change specifically
       if (settings.selectedIcon) {
         this.appIcon = settings.selectedIcon;
-        // Immediately update the app icon
         this.updateAppIcon(settings.selectedIcon);
       }
 
-      // Persist settings to file or config
+      // Persist settings to file
       this.persistSettings(settings);
 
       logger.info("Settings saved successfully", settings);
@@ -1080,10 +1505,87 @@ class ApplicationController {
     }
   }
 
+  getSettingsFilePath() {
+    const dir = config.get('app.dataDir');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return path.join(dir, 'settings.json');
+  }
+
+  loadPersistedSettings() {
+    try {
+      const filePath = this.getSettingsFilePath();
+      const envProvider = (process.env.LLM_PROVIDER || '').trim();
+      const envModel = (process.env.LLM_MODEL || '').trim();
+
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const saved = JSON.parse(raw);
+
+        this.codingLanguage = saved.codingLanguage || this.codingLanguage;
+        this.activeSkill = saved.activeSkill || this.activeSkill;
+        this.appIcon = saved.selectedIcon || saved.appIcon || this.appIcon;
+        this.llmProvider = saved.llmProvider || this.llmProvider;
+        this.llmModel = saved.llmModel || this.llmModel;
+        this.llmAuthModes = saved.llmAuthModes || config.get('llm.authModes') || { gemini: 'apiKey', openai: 'apiKey', anthropic: 'apiKey' };
+        this.firstRunCompleted = !!saved.firstRunCompleted;
+        this.speechProvider = saved.speechProvider || this.speechProvider || 'azure';
+        const savedWhisperModel = saved.whisperModel || this.whisperModel || process.env.WHISPER_MODEL || 'ggml-base.en.bin';
+        const allowedWhisperModels = new Set(['ggml-tiny.en.bin', 'ggml-base.en.bin', 'ggml-small.en.bin']);
+        this.whisperModel = allowedWhisperModels.has(savedWhisperModel) ? savedWhisperModel : 'ggml-small.en.bin';
+        this.whisperIntervalMs = Number(saved.whisperIntervalMs || this.whisperIntervalMs || process.env.WHISPER_INTERVAL_MS || 2000);
+        this.whisperAudioSource = saved.whisperAudioSource || this.whisperAudioSource || process.env.WHISPER_AUDIO_SOURCE || 'microphone';
+        this.whisperCaptureDevice = saved.whisperCaptureDevice || this.whisperCaptureDevice || process.env.WHISPER_CAPTURE_DEVICE || 'auto';
+        process.env.WHISPER_MODEL = this.whisperModel;
+        process.env.WHISPER_INTERVAL_MS = String(this.whisperIntervalMs);
+        process.env.WHISPER_AUDIO_SOURCE = this.whisperAudioSource;
+        process.env.WHISPER_CAPTURE_DEVICE = this.whisperCaptureDevice;
+        if (typeof saved.azureKey === 'string') {
+          process.env.AZURE_SPEECH_KEY = saved.azureKey;
+        }
+        if (typeof saved.azureRegion === 'string') {
+          process.env.AZURE_SPEECH_REGION = saved.azureRegion;
+        }
+      }
+
+
+      // Startup sequence has priority: allow distributables to choose provider via env.
+      if (envProvider) {
+        this.llmProvider = envProvider;
+      }
+      if (envModel) {
+        this.llmModel = envModel;
+      }
+
+      this.llmProvider = this.llmProvider || config.get('llm.provider') || 'gemini';
+      this.llmModel = this.llmModel || config.get('llm.model') || null;
+      this.llmAuthModes = this.llmAuthModes || config.get('llm.authModes') || { gemini: 'apiKey', openai: 'apiKey', anthropic: 'apiKey' };
+
+      llmService.setAuthModes(this.llmAuthModes);
+      llmService.updateProviderModel(this.llmProvider, this.llmModel);
+
+      logger.info('Loaded startup/provider settings', {
+        llmProvider: this.llmProvider,
+        llmModel: this.llmModel,
+        source: envProvider ? 'env' : 'settings-or-default',
+        firstRunCompleted: this.firstRunCompleted
+      });
+    } catch (error) {
+      logger.warn('Failed to load persisted settings', { error: error.message });
+    }
+  }
+
   persistSettings(settings) {
-    // You can extend this to save to a file or database
-    // For now, we'll just keep them in memory
-    logger.debug("Settings persisted", settings);
+    try {
+      const filePath = this.getSettingsFilePath();
+      const current = this.getSettings();
+      const merged = { ...current, ...settings };
+      fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf8');
+      logger.debug("Settings persisted", { filePath });
+    } catch (error) {
+      logger.error('Failed to persist settings to disk', { error: error.message });
+    }
   }
 
   updateAppIcon(iconKey) {
@@ -1101,10 +1603,11 @@ class ApplicationController {
 
       // App name mapping for stealth mode
       const appNames = {
-        terminal: "Terminal ",
-        activity: "Activity Monitor ",
-        settings: "System Settings ",
+        terminal: "Terminal",
+        activity: "Activity Monitor",
+        settings: "System Settings",
       };
+
 
       const iconPath = iconPaths[iconKey];
       const appName = appNames[iconKey];

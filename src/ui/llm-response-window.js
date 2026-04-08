@@ -42,6 +42,7 @@ class LLMResponseWindowUI {
       textContent: document.getElementById("text-content"),
       codeContent: document.getElementById("code-content"),
       fullMarkdown: document.getElementById("full-markdown"),
+      llmStatusChip: document.getElementById("llm-status-chip"),
     };
 
     // Validate required elements
@@ -277,6 +278,7 @@ class LLMResponseWindowUI {
       // Always show response content
       logger.debug("Showing response content...");
       this.showResponseContent();
+      this.updateStatusChip(data);
 
       // Validate elements exist
       if (!this.elements.responseContent) {
@@ -556,6 +558,27 @@ class LLMResponseWindowUI {
       component: "LLMResponseWindowUI",
     });
   }
+
+  updateStatusChip(data) {
+    const chip = this.elements.llmStatusChip;
+    if (!chip) return;
+
+    const metadata = data?.metadata || {};
+    const provider = String(metadata.provider || '').trim();
+    const authMode = String(metadata.authMode || '').trim();
+
+    if (!provider && !authMode) {
+      chip.classList.add("hidden");
+      chip.textContent = "";
+      return;
+    }
+
+    const providerLabel = provider ? provider.toUpperCase() : "LLM";
+    const authLabel = authMode ? authMode.toUpperCase() : "UNKNOWN";
+    chip.textContent = `${providerLabel} | ${authLabel}`;
+    chip.classList.remove("hidden");
+  }
+
 
   extractCodeBlocks(text) {
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;

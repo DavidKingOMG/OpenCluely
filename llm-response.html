@@ -404,6 +404,24 @@
             border-color: rgba(76,175,80,0.95); 
             transform: scale(0.98);
         }
+
+        .llm-status-chip {
+            position: absolute;
+            top: 38px;
+            right: 10px;
+            z-index: 45;
+            -webkit-app-region: no-drag;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            line-height: 1.2;
+            color: rgba(255, 255, 255, 0.92);
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            backdrop-filter: blur(6px);
+            pointer-events: none;
+            user-select: none;
+        }
     </style>
 </head>
 <body class="text-white">
@@ -427,6 +445,8 @@
                 </div>
             </div>
         </div>
+
+        <div id="llm-status-chip" class="llm-status-chip hidden"></div>
 
         <!-- Response Content -->
         <div id="response-content" class="content-area hidden">

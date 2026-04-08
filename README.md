@@ -151,18 +151,24 @@ https://github.com/user-attachments/assets/896a7140-1e85-405d-bfbe-e05c9f3a816b
 
 ### ⚙️ **Configuration**
 
-The setup script automatically handles configuration. You only need:
+OpenCluely now handles LLM setup in-app at startup.
 
-```bash
-# Required: Google Gemini API Key (setup script will ask for this)
+- On first launch, a startup modal asks for provider + model.
+- For OpenAI, use **Codex Login** to get an auth link, then paste token.
+- You can switch provider/model/auth anytime in **Settings** while the app is running.
+
+Optional `.env` values:
+
+```env
+# Optional API keys (if using API key auth mode)
 GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
-# Optional: Azure Speech Recognition (add later if you want voice features)
+# Optional voice features
 AZURE_SPEECH_KEY=your_azure_speech_key
 AZURE_SPEECH_REGION=your_region
 ```
-
-**Note**: Speech recognition is completely optional. If Azure credentials are not provided, the microphone button will be automatically hidden from all interfaces.
 
 ## 🚀 Quick Start & Installation
 
@@ -174,58 +180,34 @@ AZURE_SPEECH_REGION=your_region
    cd OpenCluely
    ```
 
-2. **Get your Gemini API key** (Required)
-   - Visit [Google AI Studio](https://aistudio.google.com/)
-   - Click "Create API Key" 
-   - Copy the key (you'll need it in step 3)
-
-3. **Run the setup script** (One command does everything!)
+2. **Install dependencies**
    ```bash
-   ./setup.sh
+   npm install
    ```
-  
 
-**That's it!** The setup script will:
-- Install all dependencies automatically
-- Create and configure your `.env` file
-- Build the app (if needed)
-- Launch OpenCluely ready to use (if not works use npm install & then npm start)
+3. **Start the app**
+   ```bash
+   npm start
+   ```
 
-### 💻 Platform-Specific Notes
-
-- **Windows**: Use Git Bash (comes with Git for Windows), WSL, or any bash environment
-- **macOS/Linux**: Use your regular terminal
-- **All platforms**: No manual npm commands needed - the setup script handles everything
-
-### 🎛️ Setup Script Options
-
-```bash
-./setup.sh --build          # Build distributable for your OS
-./setup.sh --ci             # Use npm ci instead of npm install
-./setup.sh --no-run         # Setup only, don't launch the app
-./setup.sh --install-system-deps  # Install sox for microphone (optional)
-```
+On launch, complete the in-app LLM onboarding modal.
 
 ### 🔧 **Optional: Azure Speech Setup** (For Voice Features)
 
-Voice recognition is completely optional. The setup script will create a `.env` file with just the required Gemini key. To add voice features:
+Voice recognition is optional. To enable:
 
 1. Get Azure Speech credentials:
    - Visit [Azure Portal](https://portal.azure.com/)
    - Create a Speech Service
    - Copy your key and region
 
-2. Add to your `.env` file:
+2. Add to `.env`:
    ```env
-   # Already configured by setup script
-   GEMINI_API_KEY=your_gemini_api_key_here
-
-   # Add these for voice features (optional)
    AZURE_SPEECH_KEY=your_azure_speech_key
    AZURE_SPEECH_REGION=your_region
    ```
 
-3. Restart the app - microphone buttons will now appear automatically
+3. Restart the app.
 
 ## 🎮 How to Use
 
@@ -233,7 +215,7 @@ Voice recognition is completely optional. The setup script will create a `.env` 
 
 | Action | Shortcut | Description |
 |--------|----------|-------------|
-| **Screenshot Capture** | `⌘⇧S` | Capture screen and analyze via Gemini (image understanding) |
+| **Screenshot Capture** | `⌘⇧S` | Capture screen and analyze with your selected provider (image understanding) |
 | **Toggle Speech** | `Alt+R` | Start/stop voice recognition (if configured) |
 | **Toggle Visibility** | `⌘⇧V` | Show/hide all windows |
 | **Toggle Interaction** | `⌘⇧I` or `Alt+A` | Enable/disable window interaction |
@@ -277,14 +259,6 @@ Voice recognition is completely optional. The setup script will create a `.env` 
 <summary>🧩 <b> Troubleshooting</summary>
 
 ### Setup Issues
-
-- **setup.sh not found or won't run**
-  - Make sure you're in the OpenCluely directory: `cd OpenCluely`
-  - Make the script executable: `chmod +x setup.sh`
-  - On Windows, use Git Bash (comes with Git for Windows)
-
-- **Setup script stops with exit code 130**
-  - This means you pressed Ctrl+C. Just run `./setup.sh` again
 
 - **Node or npm not found**
   - Install Node.js 18+ from [nodejs.org](https://nodejs.org/)

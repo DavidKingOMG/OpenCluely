@@ -284,8 +284,15 @@
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
+                            <div class="settings-item-label">Active Skill</div>
+                            <div class="settings-item-description">Choose your current focus area</div>
+                        </div>
+                        <select class="input-field" id="activeSkill"></select>
+                    </div>
+                    <div class="settings-item" id="codingLanguageRow">
+                        <div>
                             <div class="settings-item-label">Coding Language</div>
-                            <div class="settings-item-description">Select your preferred programming language</div>
+                            <div class="settings-item-description">Shown only for skills that need implementation language</div>
                         </div>
                         <select class="input-field" id="codingLanguage">
                             <option value="cpp">C++</option>
@@ -293,15 +300,6 @@
                             <option value="python">Python</option>
                             <option value="java">Java</option>
                             <option value="javascript">JavaScript</option>
-                        </select>
-                    </div>
-                    <div class="settings-item">
-                        <div>
-                            <div class="settings-item-label">Active Skill</div>
-                            <div class="settings-item-description">Choose your current focus area</div>
-                        </div>
-                        <select class="input-field" id="activeSkill">
-                            <option value="dsa">Data Structures & Algorithms</option>
                         </select>
                     </div>
                 </div>
@@ -338,33 +336,132 @@
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
+                            <div class="settings-item-label">STT Provider</div>
+                            <div class="settings-item-description">Choose speech-to-text engine for interview audio</div>
+                        </div>
+                        <select class="input-field" id="speechProvider">
+                            <option value="azure">Azure (Cloud STT)</option>
+                            <option value="local-whisper">Whisper Local (Offline)</option>
+                        </select>
+                    </div>
+                    <div class="settings-item" style="align-items:flex-start;">
+                        <div style="width:100%; font-size:11px; line-height:1.45; color:rgba(255,255,255,0.75);">
+                            <strong>STT differences:</strong><br>
+                            Azure: quick setup, cloud processing, ongoing usage cost.<br>
+                            Whisper Local: no per-minute fee, runs on your machine, heavier CPU/GPU usage.<br>
+                            Selecting Whisper Local will automatically install/download required components on first use.
+                        </div>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">STT Diagnostics</div>
+                            <div class="settings-item-description">Open a dedicated diagnostics window for Whisper setup and recorder checks</div>
+                        </div>
+                        <button class="input-field" id="openSTTDiagnosticsBtn" type="button" style="cursor:pointer;">Open STT Diagnostics</button>
+                    </div>
+                    <div class="settings-item" id="whisperModelRow" style="display:none;">
+                        <div>
+                            <div class="settings-item-label">Whisper Model</div>
+                            <div class="settings-item-description">Higher models are slower but more accurate</div>
+                        </div>
+                        <select class="input-field" id="whisperModel">
+                            <option value="ggml-tiny.en.bin">Tiny (fastest)</option>
+                            <option value="ggml-base.en.bin">Base (balanced)</option>
+                            <option value="ggml-small.en.bin">Small (best practical quality)</option>
+                        </select>
+                    </div>
+                    <div class="settings-item" id="whisperIntervalRow" style="display:none;">
+                        <div>
+                            <div class="settings-item-label">Whisper Update Interval</div>
+                            <div class="settings-item-description">How often local stream emits transcribed chunks</div>
+                        </div>
+                        <select class="input-field" id="whisperInterval">
+                            <option value="800">Ultra Fast (0.8s)</option>
+                            <option value="1000">Fast (1.0s)</option>
+                            <option value="2000">Balanced (2.0s)</option>
+                            <option value="3000">Stable (3.0s)</option>
+                        </select>
+                    </div>
+                    <div class="settings-item" id="whisperAudioSourceRow" style="display:none;">
+                        <div>
+                            <div class="settings-item-label">Whisper Audio Source</div>
+                            <div class="settings-item-description">Microphone or system output loopback</div>
+                        </div>
+                        <select class="input-field" id="whisperAudioSource">
+                            <option value="microphone">Microphone</option>
+                            <option value="system">System Output (loopback)</option>
+                        </select>
+                    </div>
+                    <div class="settings-item" id="whisperCaptureDeviceRow" style="display:none;">
+                        <div>
+                            <div class="settings-item-label">Whisper Capture Device</div>
+                            <div class="settings-item-description">Pick a specific input if auto selection fails</div>
+                        </div>
+                        <select class="input-field" id="whisperCaptureDevice">
+                            <option value="auto">Auto Select</option>
+                        </select>
+                    </div>
+                    <div class="settings-item" id="azureKeyRow">
+                        <div>
                             <div class="settings-item-label">Azure Speech Key</div>
-                            <div class="settings-item-description">Your Azure Cognitive Services API key</div>
+                            <div class="settings-item-description">Used only when STT Provider is Azure</div>
                         </div>
                         <input type="password" class="input-field" id="azureKey" placeholder="Enter your Azure key">
                     </div>
-                    <div class="settings-item">
+
+                    <div class="settings-item" id="azureRegionRow">
                         <div>
                             <div class="settings-item-label">Azure Region</div>
                             <div class="settings-item-description">Your Azure service region</div>
                         </div>
                         <input type="text" class="input-field" id="azureRegion" placeholder="e.g. eastus">
                     </div>
+
                 </div>
             </div>
             
             <div class="settings-section">
                 <div class="settings-section-title">
                     <i class="fas fa-robot"></i>
-                    Gemini Settings
+                    LLM Provider Settings
                 </div>
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
-                            <div class="settings-item-label">Google API Key</div>
-                            <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            <div class="settings-item-label">Provider</div>
+                            <div class="settings-item-description">Choose the provider OpenCluely should use</div>
                         </div>
-                        <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                        <select class="input-field" id="llmProvider">
+                            <option value="gemini">Google Gemini</option>
+                            <option value="openai">OpenAI (API Key)</option>
+                            <option value="codex">Codex (OpenAI Login)</option>
+                            <option value="anthropic">Anthropic</option>
+                        </select>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Model</div>
+                            <div class="settings-item-description">Select the model for the chosen provider</div>
+                        </div>
+                        <select class="input-field" id="llmModel"></select>
+                    </div>
+
+                    <div class="settings-item" id="llmApiKeyRow">
+                        <div>
+                            <div class="settings-item-label">Provider API Key</div>
+                            <div class="settings-item-description">Stored locally and used for screenshot + prompt workflows</div>
+                        </div>
+                        <input type="password" class="input-field" id="llmApiKey" placeholder="Enter provider API key">
+                    </div>
+                    <div class="settings-item" id="llmOauthRow" style="display:none;">
+                        <div>
+                            <div class="settings-item-label">Codex OAuth</div>
+                            <div class="settings-item-description">Authenticate via browser. Link can be copied or opened.</div>
+                        </div>
+                        <div style="display:flex; gap:8px; width:100%;">
+                            <button class="input-field" id="codexCopyLinkBtn" type="button" style="cursor:pointer;">Copy Link</button>
+                            <button class="input-field" id="codexOpenLinkBtn" type="button" style="cursor:pointer;">Open Link</button>
+                        </div>
                     </div>
                 </div>
             </div>

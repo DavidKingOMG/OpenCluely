@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron')
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Generic invoke helper used by existing UI
+  invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+
   // Screenshot and OCR
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   
@@ -21,6 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeWindow: (width, height) => ipcRenderer.invoke('resize-window', { width, height }),
   moveWindow: (deltaX, deltaY) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
   getWindowStats: () => ipcRenderer.invoke('get-window-stats'),
+  openSTTDiagnostics: () => ipcRenderer.invoke('open-stt-diagnostics'),
+  closeSTTDiagnostics: () => ipcRenderer.invoke('close-stt-diagnostics'),
+  getSTTDiagnostics: () => ipcRenderer.invoke('get-stt-diagnostics'),
+  getWhisperCaptureDevices: (source = 'microphone') => ipcRenderer.invoke('get-whisper-capture-devices', source),
   
   // Session memory
   getSessionHistory: () => ipcRenderer.invoke('get-session-history'),
@@ -30,10 +37,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
   
-  // Gemini LLM configuration
-  setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-gemini-api-key', apiKey),
-  getGeminiStatus: () => ipcRenderer.invoke('get-gemini-status'),
-  testGeminiConnection: () => ipcRenderer.invoke('test-gemini-connection'),
+  // LLM provider/model configuration
+  setLlmProviderConfig: (payload) => ipcRenderer.invoke('set-llm-provider-config', payload),
+  getLlmStatus: () => ipcRenderer.invoke('get-llm-status'),
+  testLlmConnection: () => ipcRenderer.invoke('test-llm-connection'),
+  getLlmProviders: () => ipcRenderer.invoke('get-llm-providers'),
+  startCodexLogin: (payload = {}) => ipcRenderer.invoke('start-codex-login', payload),
+  setCodexAuthToken: (token) => ipcRenderer.invoke('set-codex-auth-token', { token }),
+
+  // Backward-compatible Gemini aliases
+  setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-llm-provider-config', { provider: 'gemini', apiKey }),
+  getGeminiStatus: () => ipcRenderer.invoke('get-llm-status'),
+  testGeminiConnection: () => ipcRenderer.invoke('test-llm-connection'),
   
   // Settings
   showSettings: () => ipcRenderer.invoke('show-settings'),
@@ -88,6 +103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLlmError: (callback) => ipcRenderer.on('llm-error', callback),
   onTranscriptionLlmResponse: (callback) => ipcRenderer.on('transcription-llm-response', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
+  onOpenLlmConfig: (callback) => ipcRenderer.on('open-llm-config', callback),
   onDisplayLlmResponse: (callback) => ipcRenderer.on('display-llm-response', callback),
   onShowLoading: (callback) => ipcRenderer.on('show-loading', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
@@ -95,6 +111,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),
   onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),
+  onCodexAuthTokenUpdated: (callback) => ipcRenderer.on('codex-auth-token-updated', callback),
+
   
   // Generic receive method
   receive: (channel, callback) => ipcRenderer.on(channel, callback),

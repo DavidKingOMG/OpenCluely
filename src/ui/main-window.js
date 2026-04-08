@@ -10,19 +10,20 @@ class MainWindowUI {
     constructor() {
         this.isInteractive = false;
         this.isHidden = false;
-        this.currentSkill = 'dsa'; // Default, will be updated from settings
+        this.currentSkill = 'general';
+        this.skillsRequiringLanguage = ['dsa', 'programming'];
+
         this.statusDot = null;
         this.skillIndicator = null;
         this.micButton = null;
         this.isRecording = false;
         this.speechAvailable = false; // track availability
+        this.speechProvider = 'azure';
     this._popoverHideTimeout = null;
+
         
         // Define available skills for navigation
-        this.availableSkills = [
-            'dsa'
-        ];
-        
+        this.availableSkills = [];
         this.init();
     }
 
@@ -31,7 +32,8 @@ class MainWindowUI {
             this.setupElements();
             this.setupEventListeners();
             
-            // Load current skill from settings
+        // Load current skill from settings
+            await this.loadAvailableSkills();
             await this.loadCurrentSkill();
             
             // Load current interaction state
@@ -41,6 +43,7 @@ class MainWindowUI {
             await this.loadSpeechAvailability();
             
             this.updateSkillIndicator();
+            this.applyLanguageSelectorVisibility();
             this.updateAllElementStates(); // Update all elements with current state
             this.resizeWindowToContent();
             
@@ -55,6 +58,23 @@ class MainWindowUI {
                 component: 'MainWindowUI',
                 error: error.message
             });
+        }
+    }
+
+    async loadAvailableSkills() {
+        try {
+            if (window.electronAPI?.invoke) {
+                const skills = await window.electronAPI.invoke("get-available-skills");
+                if (Array.isArray(skills) && skills.length) {
+                    this.availableSkills = skills;
+                }
+            }
+        } catch (error) {
+            logger.warn("Failed to load available skills, using fallback", {
+                component: "MainWindowUI",
+                error: error.message
+            });
+            this.availableSkills = ["general", "dsa", "programming"];
         }
     }
 
@@ -103,10 +123,15 @@ class MainWindowUI {
 
     async loadSpeechAvailability() {
         try {
+            if (window.electronAPI && window.electronAPI.getSettings) {
+                const settings = await window.electronAPI.getSettings();
+                this.speechProvider = settings?.speechProvider || 'azure';
+            }
             if (window.electronAPI && window.electronAPI.getSpeechAvailability) {
                 this.speechAvailable = await window.electronAPI.getSpeechAvailability();
                 this.applyMicVisibility();
             }
+
         } catch (e) {
             this.speechAvailable = false;
             this.applyMicVisibility();
@@ -115,7 +140,8 @@ class MainWindowUI {
 
     applyMicVisibility() {
         if (this.micButton) {
-            if (this.speechAvailable) {
+            // Keep mic visible for local-whisper so user can record even while setup finalizes.
+            if (this.speechAvailable || this.speechProvider === 'local-whisper') {
                 this.micButton.style.display = '';
             } else {
                 this.micButton.style.display = 'none';
@@ -124,6 +150,15 @@ class MainWindowUI {
             setTimeout(() => this.resizeWindowToContent(), 50);
         }
     }
+
+    applyLanguageSelectorVisibility() {
+        const languageSelector = document.getElementById('languageSelector');
+        if (!languageSelector) return;
+        const shouldShow = this.skillsRequiringLanguage.includes(String(this.currentSkill || '').toLowerCase());
+        languageSelector.style.display = shouldShow ? '' : 'none';
+        setTimeout(() => this.resizeWindowToContent(), 30);
+    }
+
 
     updateAllElementStates() {
         // Update all interactive elements with current state
@@ -280,14 +315,7 @@ class MainWindowUI {
         // Skill indicator click handler toggles DSA skill
         this.skillIndicator.addEventListener('click', () => {
             if (!this.isInteractive) return;
-            const newSkill = 'dsa';
-            if (window.electronAPI && window.electronAPI.updateActiveSkill) {
-                window.electronAPI.updateActiveSkill(newSkill).then(() => {
-                    this.handleSkillActivated(newSkill);
-                });
-            } else {
-                this.handleSkillActivated(newSkill);
-            }
+            this.navigateSkill(1);
         });
 
         // Check for required elements (settingsIndicator is optional)
@@ -414,15 +442,19 @@ class MainWindowUI {
                 }
             });
 
-            window.electronAPI.onSpeechAvailability((event, data) => {
+            window.electronAPI.onSpeechAvailability(async (event, data) => {
                 this.speechAvailable = !!(data && data.available);
+                try {
+                    const settings = await window.electronAPI.getSettings();
+                    this.speechProvider = settings?.speechProvider || this.speechProvider || 'azure';
+                } catch (_) {}
                 this.applyMicVisibility();
             });
+
 
             // Listen for coding language changes from other windows
             window.electronAPI.onCodingLanguageChanged((event, data) => {
                 if (data && data.language && this.languageSelect) {
-                    // avoid clobbering if same value
                     if (this.languageSelect.value !== data.language) {
                         this.languageSelect.value = data.language;
                     }
@@ -430,6 +462,17 @@ class MainWindowUI {
                         component: 'MainWindowUI',
                         language: data.language
                     });
+                }
+            });
+
+            window.electronAPI.receive('open-llm-config', async (event, payload) => {
+                try {
+                    const modal = await this.createLlmConfigModal(payload || {});
+                    // Startup onboarding should not be dismissible without setup.
+                    modal.dataset.locked = 'true';
+                    document.body.appendChild(modal);
+                } catch (error) {
+                    this.showNotification('Failed to open LLM configuration', 'error');
                 }
             });
             
@@ -494,7 +537,8 @@ class MainWindowUI {
             'programming': 'Programming',
             'devops': 'DevOps',
             'system-design': 'System Design',
-            'negotiation': 'Negotiation'
+            'negotiation': 'Negotiation',
+            'general': 'General'
         };
         
         const displaySkill = skillNames[skill] || skill.toUpperCase();
@@ -578,15 +622,9 @@ class MainWindowUI {
     handleSkillChanged(data) {
         const oldSkill = this.currentSkill;
         this.currentSkill = data.skill;
-        
-        logger.info('Handling skill change', {
-            component: 'MainWindowUI',
-            oldSkill: oldSkill,
-            newSkill: data.skill,
-            skillIndicatorExists: !!this.skillIndicator
-        });
-        
         this.updateSkillIndicator();
+        this.applyLanguageSelectorVisibility();
+
         
         logger.info('Skill changed successfully', {
             component: 'MainWindowUI',
@@ -626,6 +664,8 @@ class MainWindowUI {
 
     updateSkillIndicator() {
         const skillNames = {
+            'general': 'General',
+            'programming': 'Programming',
             'dsa': 'DSA',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',
@@ -747,7 +787,8 @@ class MainWindowUI {
             'programming': 'Programming',
             'devops': 'DevOps',
             'system-design': 'System Design',
-            'negotiation': 'Negotiation'
+            'negotiation': 'Negotiation',
+            'general': 'General'
         };
         
         const displayName = skillNames[skill] || skill.toUpperCase();
@@ -870,115 +911,235 @@ class MainWindowUI {
     }
 
     async showGeminiConfig() {
+        // Keep old method name for compatibility; now opens provider-aware modal.
         try {
-            const status = await window.electronAPI.getGeminiStatus();
-            
-            const modal = this.createGeminiConfigModal(status);
+            const status = await window.electronAPI.getLlmStatus();
+            const modal = await this.createLlmConfigModal(status);
             document.body.appendChild(modal);
-            
-            logger.debug('Gemini config modal shown', { component: 'MainWindowUI' });
         } catch (error) {
-            logger.error('Failed to show Gemini config', {
-                component: 'MainWindowUI',
-                error: error.message
-            });
-            this.showNotification('Failed to load Gemini configuration', 'error');
+            this.showNotification('Failed to load LLM configuration', 'error');
         }
     }
 
-    createGeminiConfigModal(status) {
+    async createLlmConfigModal(status) {
+        const providers = status.providers || await window.electronAPI.getLlmProviders();
+        const provider = status.provider || 'gemini';
+
+        const isProviderLinked = (selectedProvider, llmStatus) => {
+            if (!selectedProvider || !llmStatus || selectedProvider !== llmStatus.provider) {
+                return false;
+            }
+            if (selectedProvider === 'codex') {
+                return llmStatus.authMode === 'oauth' && !!llmStatus.hasApiKey;
+            }
+            if (selectedProvider === 'openai') {
+                return llmStatus.authMode === 'apiKey' && !!llmStatus.hasApiKey;
+            }
+            return !!llmStatus.hasApiKey;
+        };
+
+        const modelOptions = providers?.[provider]?.models || [];
+        const initialLinked = isProviderLinked(provider, status);
+
         const modal = document.createElement('div');
         modal.className = 'fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50';
         modal.innerHTML = `
             <div class="bg-gray-900 text-white p-6 rounded-lg max-w-md w-full">
                 <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-xl font-bold">🤖 Gemini Flash 1.5 Configuration</h2>
-                    <button class="text-gray-400 hover:text-white" onclick="this.closest('.fixed').remove()">✕</button>
+                    <h2 class="text-xl font-bold">LLM Configuration</h2>
+                    <button class="text-gray-400 hover:text-white" onclick="if(!this.closest('.fixed')?.dataset?.locked){this.closest('.fixed').remove()}" title="Close">x</button>
                 </div>
-                
                 <div class="mb-4 p-3 rounded ${status.hasApiKey ? 'bg-green-900' : 'bg-red-900'}">
                     <p><strong>Status:</strong> ${status.hasApiKey ? 'Configured' : 'Not Configured'}</p>
-                    <p><strong>Model:</strong> ${status.model}</p>
+                    <p><strong>Provider:</strong> ${provider}</p>
+                    <p><strong>Model:</strong> ${status.model || ''}</p>
+                    <p class="text-xs text-gray-300 mt-2">Pick provider/model, then use login or API key to continue startup.</p>
                 </div>
-                
-                <div class="mb-4">
-                    <label class="block text-sm font-medium mb-2">API Key:</label>
-                    <input type="password" id="geminiApiKey" placeholder="Enter your Gemini API key" 
-                           class="w-full p-2 bg-gray-800 border border-gray-600 rounded text-white">
-                    <p class="text-xs text-gray-400 mt-1">
-                        Get your API key from: <a href="https://makersuite.google.com/app/apikey" target="_blank" class="text-blue-400">Google AI Studio</a>
-                    </p>
+                <div class="mb-3">
+                    <label class="block text-sm font-medium mb-2">Provider</label>
+                    <select id="llmProviderSelect" class="w-full p-2 bg-gray-800 border border-gray-600 rounded text-white">
+                        <option value="gemini" ${provider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
+                        <option value="openai" ${provider === 'openai' ? 'selected' : ''}>OpenAI (API Key)</option>
+                        <option value="codex" ${provider === 'codex' ? 'selected' : ''}>Codex (OpenAI Login)</option>
+                        <option value="anthropic" ${provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+                    </select>
                 </div>
-                
+                <div class="mb-3">
+                    <label class="block text-sm font-medium mb-2">Model</label>
+                    <select id="llmModelSelect" class="w-full p-2 bg-gray-800 border border-gray-600 rounded text-white" ${initialLinked ? '' : 'disabled'}>
+                        ${initialLinked
+                            ? modelOptions.map(model => `<option value="${model}" ${model === status.model ? 'selected' : ''}>${model}</option>`).join('')
+                            : '<option value="">Link provider first</option>'}
+                    </select>
+                </div>
+                <div class="mb-4" id="llmApiKeyContainer">
+                    <label class="block text-sm font-medium mb-2">API Key</label>
+                    <input type="password" id="llmApiKey" placeholder="Enter API key" class="w-full p-2 bg-gray-800 border border-gray-600 rounded text-white">
+                </div>
+                <div class="mb-4 hidden" id="llmOauthContainer">
+                    <label class="block text-sm font-medium mb-2">Codex Login</label>
+                    <div class="flex gap-2">
+                        <button id="codexCopyLinkBtn" class="flex-1 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded">Copy Link</button>
+                        <button id="codexOpenLinkBtn" class="flex-1 bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded">Open Link</button>
+                    </div>
+                </div>
                 <div class="flex space-x-2">
-                    <button onclick="mainWindowUI.configureGemini()" class="flex-1 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">
-                        Configure
-                    </button>
-                    <button onclick="mainWindowUI.testGeminiConnection()" class="flex-1 bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
-                        Test Connection
-                    </button>
-                </div>
-                
-                <div class="mt-4 text-center">
-                    <button class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded" onclick="this.closest('.fixed').remove()">
-                        Close
-                    </button>
+                    <button onclick="mainWindowUI.configureLlmProvider()" class="flex-1 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">Save</button>
+                    <button onclick="mainWindowUI.testLlmConnection()" class="flex-1 bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Test</button>
                 </div>
             </div>
         `;
+
+        const providerSelect = modal.querySelector('#llmProviderSelect');
+        const modelSelect = modal.querySelector('#llmModelSelect');
+        const apiKeyContainer = modal.querySelector('#llmApiKeyContainer');
+        const oauthContainer = modal.querySelector('#llmOauthContainer');
+        const codexCopyLinkBtn = modal.querySelector('#codexCopyLinkBtn');
+        const codexOpenLinkBtn = modal.querySelector('#codexOpenLinkBtn');
+        let latestCodexLoginUrl = '';
+
+        const populateModelSelect = (selectedProvider, selectedModel, linked) => {
+            const models = providers?.[selectedProvider]?.models || [];
+            if (!linked || !models.length) {
+                modelSelect.innerHTML = '<option value="">Link provider first</option>';
+                modelSelect.disabled = true;
+                return;
+            }
+
+            modelSelect.disabled = false;
+            modelSelect.innerHTML = models.map(m => `<option value="${m}" ${m === selectedModel ? 'selected' : ''}>${m}</option>`).join('');
+        };
+
+        const refreshAuthUi = () => {
+            const isCodex = providerSelect.value === 'codex';
+            apiKeyContainer.classList.toggle('hidden', isCodex);
+            oauthContainer.classList.toggle('hidden', !isCodex);
+        };
+
+        providerSelect.addEventListener('change', async () => {
+            refreshAuthUi();
+            const latestStatus = await window.electronAPI.getLlmStatus();
+            const linked = isProviderLinked(providerSelect.value, latestStatus);
+            populateModelSelect(providerSelect.value, linked ? latestStatus.model : null, linked);
+
+            if (providerSelect.value === 'codex') {
+                try {
+                    const created = await window.electronAPI.startCodexLogin({ mode: 'copy' });
+                    if (created?.success && created?.loginUrl) {
+                        latestCodexLoginUrl = created.loginUrl;
+                        this.showNotification('Codex login link created', 'success');
+                    } else {
+                        this.showNotification(created?.instructions || created?.error || 'Failed to create Codex login link', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification(error.message || 'Failed to create Codex login link', 'error');
+                }
+            }
+        });
+
+        codexCopyLinkBtn?.addEventListener('click', async () => {
+            try {
+                const result = latestCodexLoginUrl
+                    ? { success: true, loginUrl: latestCodexLoginUrl }
+                    : await window.electronAPI.startCodexLogin({ mode: 'copy' });
+                if (!result?.success || !result?.loginUrl) {
+                    this.showNotification(result?.instructions || result?.error || 'Failed to create Codex login URL', 'error');
+                    return;
+                }
+                latestCodexLoginUrl = result.loginUrl;
+                await window.electronAPI.copyToClipboard(result.loginUrl);
+                this.showNotification('Codex login link copied', 'success');
+            } catch (error) {
+                this.showNotification(error.message, 'error');
+            }
+        });
+
+        codexOpenLinkBtn?.addEventListener('click', async () => {
+            try {
+                const result = await window.electronAPI.startCodexLogin({ mode: 'open' });
+                if (!result?.success) {
+                    this.showNotification(result?.instructions || result?.error || 'Failed to open Codex login', 'error');
+                    return;
+                }
+                this.showNotification(result?.instructions || 'Codex login started in browser', 'success');
+            } catch (error) {
+                this.showNotification(error.message, 'error');
+            }
+        });
+
+        if (window.electronAPI?.onCodexAuthTokenUpdated) {
+            window.electronAPI.onCodexAuthTokenUpdated(async () => {
+                if (providerSelect.value !== 'codex') return;
+                const latestStatus = await window.electronAPI.getLlmStatus();
+                const linked = isProviderLinked(providerSelect.value, latestStatus);
+                populateModelSelect(providerSelect.value, linked ? latestStatus.model : null, linked);
+                if (linked) {
+                    this.showNotification('Codex login completed', 'success');
+                }
+            });
+        }
+
+        refreshAuthUi();
+        populateModelSelect(provider, status.model, initialLinked);
         return modal;
     }
 
-    async configureGemini() {
-        const apiKey = document.getElementById('geminiApiKey').value.trim();
-        if (!apiKey) {
+    async configureLlmProvider() {
+        const provider = document.getElementById('llmProviderSelect').value;
+        const modelSelect = document.getElementById('llmModelSelect');
+        const model = modelSelect?.disabled ? null : modelSelect.value;
+        const apiKey = (document.getElementById('llmApiKey')?.value || '').trim();
+        if (provider !== 'codex' && !apiKey) {
             this.showNotification('Please enter an API key', 'error');
             return;
         }
-        
+
+        if (provider === 'codex') {
+            const latest = await window.electronAPI.getLlmStatus();
+            if (!(latest.provider === 'codex' && latest.authMode === 'oauth' && latest.hasApiKey)) {
+                this.showNotification('Complete Codex browser login first', 'error');
+                return;
+            }
+        }
+
         try {
-            const result = await window.electronAPI.setGeminiApiKey(apiKey);
-            if (result.success) {
-                this.showNotification('Gemini API key configured successfully!', 'success');
-                document.querySelector('.fixed').remove();
-                
-                logger.info('Gemini API key configured', { component: 'MainWindowUI' });
+            const authMode = provider === 'codex' ? 'oauth' : 'apiKey';
+            const result = await window.electronAPI.setLlmProviderConfig({ provider, model, authMode, apiKey });
+            if (result.isInitialized) {
+                await window.electronAPI.saveSettings({ llmProvider: provider, llmModel: model || result.model, firstRunCompleted: true });
+                this.showNotification('Provider configured successfully', 'success');
+                const modal = document.querySelector('.fixed');
+                if (modal) {
+                    modal.dataset.locked = '';
+                    modal.remove();
+                }
             } else {
-                this.showNotification(`Configuration failed: ${result.error}`, 'error');
-                logger.error('Gemini configuration failed', {
-                    component: 'MainWindowUI',
-                    error: result.error
-                });
+                this.showNotification('Configuration saved but initialization failed', 'error');
             }
         } catch (error) {
             this.showNotification(`Error: ${error.message}`, 'error');
-            logger.error('Gemini configuration error', {
-                component: 'MainWindowUI',
-                error: error.message
-            });
         }
     }
 
-    async testGeminiConnection() {
+    async testLlmConnection() {
         try {
-            const result = await window.electronAPI.testGeminiConnection();
+            const result = await window.electronAPI.testLlmConnection();
             if (result.success) {
-                this.showNotification('Gemini connection test successful!', 'success');
-                logger.info('Gemini connection test successful', { component: 'MainWindowUI' });
+                this.showNotification('LLM connection test successful', 'success');
             } else {
                 this.showNotification(`Connection test failed: ${result.error}`, 'error');
-                logger.error('Gemini connection test failed', {
-                    component: 'MainWindowUI',
-                    error: result.error
-                });
             }
         } catch (error) {
             this.showNotification(`Error: ${error.message}`, 'error');
-            logger.error('Gemini connection test error', {
-                component: 'MainWindowUI',
-                error: error.message
-            });
         }
+    }
+
+    async configureGemini() {
+        return this.configureLlmProvider();
+    }
+
+    async testGeminiConnection() {
+        return this.testLlmConnection();
     }
 
     setupSettingsShortcut() {

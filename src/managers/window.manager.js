@@ -19,7 +19,7 @@ class WindowManager {
     this.isInitialized = false;
     this.isInitializing = false;
     this.isRecording = false;
-    
+
     // Add debouncing to prevent excessive operations
     this.lastEnforceTime = 0;
     this.enforceDebounceMs = 1000; // Only enforce once per second
@@ -67,6 +67,23 @@ class WindowManager {
         alwaysOnTop: true,
         visibleOnAllWorkspaces: true,
         fullscreenable: false
+      },
+      sttDiagnostics: {
+        width: 520,
+        height: 420,
+        file: 'stt-diagnostics.html',
+        title: 'STT Diagnostics',
+        frame: false,
+        titleBarStyle: 'hidden',
+        transparent: true,
+        skipTaskbar: true,
+        resizable: true,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        alwaysOnTop: true,
+        visibleOnAllWorkspaces: true,
+        fullscreenable: false
       }
     };
 
@@ -91,6 +108,7 @@ class WindowManager {
       await this.createChatWindow();
       await this.createLLMResponseWindow();
       await this.createSettingsWindow();
+      await this.createSTTDiagnosticsWindow();
       
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
@@ -192,7 +210,19 @@ class WindowManager {
     return window;
   }
 
+  async createSTTDiagnosticsWindow() {
+    if (this.windows.has('sttDiagnostics')) {
+      return this.windows.get('sttDiagnostics');
+    }
+    const window = await this.createWindow('sttDiagnostics');
+    this.windows.set('sttDiagnostics', window);
+    window.hide();
+    return window;
+  }
+
+ 
   async createWindow(type, showOnCreate = false) {
+
     const windowConfig = this.windowConfigs[type];
     if (!windowConfig) {
       throw new Error(`Unknown window type: ${type}`);
@@ -321,7 +351,29 @@ class WindowManager {
         }),
         level: process.platform === 'darwin' ? 'floating' : undefined,
       };
+    } else if (type === 'sttDiagnostics') {
+      browserWindowOptions = {
+        ...baseOptions,
+        width: 520,
+        height: 420,
+        frame: false,
+        titleBarStyle: 'hidden',
+        transparent: true,
+        resizable: true,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        hasShadow: true,
+        ...(process.platform === 'darwin' && {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: -100, y: -100 },
+          type: 'panel',
+          acceptFirstMouse: true
+        }),
+        level: process.platform === 'darwin' ? 'floating' : undefined,
+      };
     } else {
+
       // Other windows (skills)
       browserWindowOptions = {
         ...baseOptions,
@@ -600,7 +652,8 @@ class WindowManager {
       main: { x: displayX + 50, y: displayY + topMargin },
       chat: { x: displayX + screenWidth - windowWidth - 50, y: displayY + topMargin },
       llmResponse: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin },
-      settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin }
+      settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin },
+      sttDiagnostics: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin + 40 }
     };
 
     const position = positions[type] || { x: displayX + 100, y: displayY + topMargin };
@@ -883,6 +936,7 @@ class WindowManager {
     }
   }
 
+
   switchToWindow(windowType) {
     if (this.windows.has('chat') && this.windows.get('chat').isVisible()) {
       this.hideChatWindow();
@@ -917,7 +971,7 @@ class WindowManager {
     }
 
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
+      if (type !== 'llmResponse' && type !== 'sttDiagnostics') { // Keep diagnostics opt-in only
         this.showOnCurrentDesktop(window);
       }
     });
@@ -934,6 +988,7 @@ class WindowManager {
     });
   }
 
+
   hideAllWindows() {
     this.windows.forEach((window, type) => {
       if (type !== 'llmResponse') {
@@ -944,6 +999,7 @@ class WindowManager {
     this.isVisible = false;
     logger.info('All windows hidden');
   }
+
 
   toggleVisibility() {
     if (this.isScreenBeingShared) {
@@ -1215,7 +1271,25 @@ class WindowManager {
     }
   }
 
+  showSTTDiagnostics() {
+    const diagnosticsWindow = this.windows.get('sttDiagnostics');
+    if (!diagnosticsWindow || diagnosticsWindow.isDestroyed()) {
+      return;
+    }
+
+    this.showOnCurrentDesktop(diagnosticsWindow);
+    this.centerWindow(diagnosticsWindow);
+  }
+
+  hideSTTDiagnostics() {
+    const diagnosticsWindow = this.windows.get('sttDiagnostics');
+    if (diagnosticsWindow) {
+      diagnosticsWindow.hide();
+    }
+  }
+
   expandLLMWindow(contentMetrics = null) {
+
     const llmWindow = this.windows.get('llmResponse');
     if (!llmWindow || this.isScreenBeingShared) return;
 
@@ -1476,7 +1550,12 @@ class WindowManager {
             newX = displayX + (displayWidth - windowWidth) / 2;
             newY = displayY + topMargin;
             break;
+          case 'sttDiagnostics':
+            newX = displayX + (displayWidth - windowWidth) / 2;
+            newY = displayY + topMargin + 40;
+            break;
           default:
+
             newX = displayX + 100;
             newY = displayY + topMargin;
         }
