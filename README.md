@@ -1,334 +1,134 @@
-<div align="center">
+# OpenCluely
 
-# 🧠 OpenCluely 
+OpenCluely is a stealth-style desktop interview assistant built with Electron. It provides real-time help from screenshots and voice transcription, with multi-provider LLM support and in-app onboarding.
 
-<!-- Development Banner -->
-<p align="center">
-  <img src="https://img.shields.io/badge/Status-Under%20Active%20Development-FFA500?style=for-the-badge&logo=github&logoColor=white" alt="Under Active Development" />
-</p>
-<p align="center" style="margin-top:-8px;">
-  <em>Core is working; improvements are shipping daily.</em>
-</p>
+## What Is New
 
-<p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=35&duration=3000&pause=1000&color=2D9CDB&center=true&vCenter=true&width=600&lines=OpenCluely;Invisible+Interview+Assistant;AI-Powered+Real-Time+Help;Stealth+Technology+Expert" alt="OpenCluely Typing Animation" />
-</p>
+- Multi-provider LLM support with runtime switching:
+  - `gemini` (API key)
+  - `openai` (API key)
+  - `codex` (OAuth login flow)
+  - `anthropic` (API key)
+- Startup LLM onboarding modal (provider + model + auth mode).
+- Codex OAuth callback flow integrated in-app (local callback server).
+- Screenshot analysis now uses the currently selected provider and model.
+- STT diagnostics window added with close button and `Esc` support.
+- Improved fallback/error messaging for quota/auth/network issues.
+- Codex request/response compatibility updates:
+  - ChatGPT backend endpoint flow
+  - SSE parsing and stabilization
+  - duplicate response text fix
 
-<p align="center">
-  <img src="https://img.shields.io/badge/OpenCluely-AI%20Interview%20Assistant-2D9CDB?style=for-the-badge&logo=robot&logoColor=white" alt="OpenCluely Badge" />
-</p>
+## Features
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Platform-Cross%20Platform-blue?style=flat-square" alt="Platform" />
-  <img src="https://img.shields.io/badge/Stealth-100%25%20Invisible-red?style=flat-square" alt="Stealth" />
-  <img src="https://img.shields.io/badge/AI-Gemini%20Powered-orange?style=flat-square" alt="AI" />
-  <img src="https://img.shields.io/badge/Speech-Azure%20Optional-blueviolet?style=flat-square" alt="Speech" />
-</p>
+- Stealth overlay windows (floating controls, always-on-top behavior).
+- Screenshot-based question analysis.
+- Optional speech-to-text input.
+- Skill-based prompting (general, programming, dsa, system-design, and more).
+- Session-aware responses.
+- Draggable response/chat windows with markdown rendering.
 
----
+## Requirements
 
+- Node.js 18+
+- npm
+- Windows/macOS/Linux (Electron-supported)
 
-**OpenCluely** is a revolutionary AI-powered desktop application that provides **invisible, real-time assistance** during technical rounds.
+## Quick Start
 
-## 🎬 Demo Video
+1) Clone
 
-https://github.com/user-attachments/assets/896a7140-1e85-405d-bfbe-e05c9f3a816b
-</div>
+```bash
+git clone https://github.com/DavidKingOMG/OpenCluely.git
+cd OpenCluely
+```
 
-## 🌟 Why OpenCluely?
+2) Install
 
-<table>
-<tr>
-<td width="50%">
+```bash
+npm install
+```
 
-### 🥷 **100% Stealth Mode**
-- **Invisible to Screen Sharing**: Zoom, Teams, Meet, Discord
-- **Process Disguise**: Appears as normal system process (Terminal, Activity Monitor, Settings)
-- **Click-Through Windows**: Transparent overlay technology
-- **Draggable UI**: Move windows anywhere on screen
-- **Zero Detection**: Bypasses all recording software
+3) Run
 
-</td>
-<td width="50%">
+```bash
+npm start
+```
 
-### 🚀 **AI-Powered Intelligence**
-- **Direct Image Analysis**: Screenshots are analyzed by Gemini (no Tesseract OCR)
-- **Voice Commands**: Optional Azure Speech (Whisper questions, get instant answers)
-- **Context Memory**: Remembers entire interview conversation
-- **Multi-Language Support**: C++, Python, Java, JavaScript, C
-- **Smart Response Window**: Draggable with close button
+On first launch, complete the in-app LLM setup modal.
 
-</td>
-</tr>
-</table>
+## Configuration
 
-## 🖼️ Modern UI Features
+OpenCluely supports in-app provider setup, plus optional `.env` values.
 
-### 📱 **Interactive Windows**
-- **Floating Overlay Bar**: Compact command center with camera, mic, and skill selector
-- **Draggable Answer Window**: Move and resize AI response window anywhere
-- **Close Button**: Clean × button to close answer window when needed
-- **Auto-Hide Mic**: Microphone button appears only when Azure Speech is configured
-- **Interactive Chat**: Full conversation window with markdown support
-
-### 🎨 **Visual Design**
-- **Glass Morphism**: Beautiful blur effects and transparency
-- **Adaptive Layout**: UI adjusts based on available services
-- **Smart Resizing**: Windows resize automatically to fit content
-- **Professional Look**: Mimics system applications for perfect stealth
-
----
-
-## 🎯 Functional Overview
-
-### 📋 **Core Components**
-
-<table>
-<tr>
-<td width="33%">
-
-#### 🖱️ **Main Overlay**
-- Floating command bar
-- Screenshot capture (⌘⇧S)
-- Microphone toggle (Optional)
-- Skill selector (DSA)
-- Language picker
-- Status indicator
-
-</td>
-<td width="33%">
-
-#### 💬 **Interactive Chat**
-- Real-time transcription
-- AI conversation
-- Markdown formatting
-- Session memory
-- Listening animations
-- Auto-scroll messages
-
-</td>
-<td width="33%">
-
-#### 📊 **Answer Window**
-- Draggable interface
-- Close button (×)
-- Split layout for code
-- Full markdown support
-- Syntax highlighting
-- Smart content sizing
-
-</td>
-</tr>
-</table>
-
-
----
-## ✅ To-Do List & Development Status
-
-### 🎯 **Core Features** *(Completed)*
-
-- [x] **Stealth overlay** with draggable command bar and click‑through toggle
-- [x] **Screenshot capture** with direct Gemini analysis (no OCR step)
-- [x] **AI response window** with markdown and code highlighting
-- [x] **Global shortcuts** (capture, visibility, interaction, chat, settings)
-- [x] **Session memory** and chat UI
-- [x] **Language picker** and DSA skill prompt
-- [x] **Optional Azure Speech** integration with auto‑hide mic
-- [x] **Multi‑monitor** and area capture APIs
-- [x] **Window binding** and positioning system
-- [x] **Settings management** with app icon/stealth modes
-
-### 🚧 **Planned Features** *(In Development)*
-
-- [ ] **Hidden during screen share** (auto‑hide all windows while screen is being shared)
-- [ ] **Multi‑model support** (OpenAI/Anthropic/Local backends alongside Gemini)
-- [ ] **Auto‑typer for code snippets** (paste or simulate typing into editors/IDEs)
-- [ ] **Export conversation history** (save sessions as markdown/PDF)
-- [ ] **Performance optimizations** (faster startup, reduced memory usage)
-- [ ] **Enhanced stealth modes** (process name randomization, deeper OS integration)
-
----
-
-### ⚙️ **Configuration**
-
-OpenCluely now handles LLM setup in-app at startup.
-
-- On first launch, a startup modal asks for provider + model.
-- For OpenAI, use **Codex Login** to get an auth link, then paste token.
-- You can switch provider/model/auth anytime in **Settings** while the app is running.
-
-Optional `.env` values:
+### Optional `.env`
 
 ```env
-# Optional API keys (if using API key auth mode)
+# Default startup selection (optional)
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+
+# API keys (for API key auth modes)
 GEMINI_API_KEY=your_gemini_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
-# Optional voice features
+# Optional speech settings
 AZURE_SPEECH_KEY=your_azure_speech_key
-AZURE_SPEECH_REGION=your_region
+AZURE_SPEECH_REGION=your_azure_region
+
+# Optional Whisper/runtime tuning (if used by your setup)
+WHISPER_MODEL=ggml-base.en.bin
+WHISPER_INTERVAL_MS=2000
+WHISPER_AUDIO_SOURCE=microphone
+WHISPER_CAPTURE_DEVICE=auto
 ```
 
-## 🚀 Quick Start & Installation
+## Provider/Auth Behavior
 
-### ⚡ Three Simple Steps (All Operating Systems)
+- `codex` uses OAuth mode and a local callback flow.
+- `openai`, `gemini`, and `anthropic` use API key mode.
+- Model selection is validated against the selected provider.
+- Screenshot and transcription requests use the active provider/model pair.
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/TechyCSR/OpenCluely.git
-   cd OpenCluely
-   ```
+## STT Diagnostics
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+You can open STT diagnostics from Settings.
 
-3. **Start the app**
-   ```bash
-   npm start
-   ```
+- Shows current STT health/details.
+- Close via button or `Esc`.
 
-On launch, complete the in-app LLM onboarding modal.
+## Keyboard Shortcuts
 
-### 🔧 **Optional: Azure Speech Setup** (For Voice Features)
+Common defaults include:
 
-Voice recognition is optional. To enable:
+- Screenshot capture
+- Toggle speech recording
+- Toggle interaction mode
+- Open chat/settings
 
-1. Get Azure Speech credentials:
-   - Visit [Azure Portal](https://portal.azure.com/)
-   - Create a Speech Service
-   - Copy your key and region
+(Exact bindings may vary by platform/window context.)
 
-2. Add to `.env`:
-   ```env
-   AZURE_SPEECH_KEY=your_azure_speech_key
-   AZURE_SPEECH_REGION=your_region
-   ```
+## Troubleshooting
 
-3. Restart the app.
+- If provider calls fail, check provider auth mode and credentials in Settings.
+- If Codex OAuth succeeds but requests fail, re-run login and confirm selected model is a Codex-supported model.
+- If speech is unavailable, app still works with screenshot + typed workflows.
 
-## 🎮 How to Use
+## Security and Privacy
 
-### 🖱️ **Main Controls**
+- Keep `.env` out of version control.
+- Do not commit API keys, OAuth tokens, or personal credentials.
+- This repository includes `env.example` as a template only.
 
-| Action | Shortcut | Description |
-|--------|----------|-------------|
-| **Screenshot Capture** | `⌘⇧S` | Capture screen and analyze with your selected provider (image understanding) |
-| **Toggle Speech** | `Alt+R` | Start/stop voice recognition (if configured) |
-| **Toggle Visibility** | `⌘⇧V` | Show/hide all windows |
-| **Toggle Interaction** | `⌘⇧I` or `Alt+A` | Enable/disable window interaction |
-| **Switch to Chat** | `⌘⇧C` | Open interactive chat window |
-| **Settings** | `⌘,` | Open settings panel |
+## Development Notes
 
-### 🎯 **Workflow**
+- Main process: `main.js`
+- LLM integration: `src/services/llm.service.js`
+- Core config/provider models: `src/core/config.js`
+- Settings UI logic: `src/ui/settings-window.js`
+- STT diagnostics UI: `stt-diagnostics.html`, `src/ui/stt-diagnostics-window.js`
 
-1. **Start OpenCluely** → App appears as system process (Terminal/Activity Monitor)
-2. **Position Windows** → Drag overlay and answer windows to preferred locations
-3. **Capture Questions** → Use screenshot (⌘⇧S) or voice commands
-4. **Get AI Answers** → Instant responses in draggable answer window
-5. **Interactive Chat** → Type or speak for detailed conversations
-6. **Stay Stealth** → All operations invisible to screen recording
+## License
 
-### 🔧 **Advanced Features**
-
-#### 🎨 **Window Management**
-- **Draggable Interface**: Click and drag any window to reposition
-- **Auto-resize**: Windows automatically adjust to content
-- **Close Button**: Click × to close answer window
-- **Always on Top**: Windows stay above all applications
-
-#### 🧠 **AI Intelligence**
-- **Context Awareness**: Remembers entire conversation
-- **Code Detection**: Automatically formats code blocks
-- **Language Specific**: Tailored responses for selected programming language
-- **Session Memory**: Maintains context across multiple questions
- - **Image Understanding**: DSA prompt is applied only for new image-based queries; chat messages don’t include the full prompt
- - **Multi-monitor & Area Capture**: Programmatic APIs allow targeting a display and optional rectangular crop for focused analysis
-
-#### 🔊 **Optional Voice Features** (Azure Speech)
-- **Real-time Transcription**: Speak questions naturally
-- **Listening Animation**: Visual feedback during recording
-- **Interim Results**: See transcription as you speak
-- **Auto-processing**: Instant AI responses to voice input
-]
----
-
-<details markdown="1">
-<summary>🧩 <b> Troubleshooting</summary>
-
-### Setup Issues
-
-- **Node or npm not found**
-  - Install Node.js 18+ from [nodejs.org](https://nodejs.org/)
-  - Restart your terminal and try again
-
-### App Issues
-
-- **Electron won't start or shows blank window (Linux)**
-  - Try: `npm run dev`
-  - Ensure X11/XWayland is available if running in headless environments
-
-- **macOS screen capture doesn't work**
-  - Grant "Screen Recording" permission in System Settings → Privacy & Security → Screen Recording
-  - Quit and relaunch the app after granting permission
-
-- **Windows SmartScreen blocks the app**
-  - Click "More info" → "Run anyway" or use `npm start` during development
-
-- **Microphone/voice not working**
-  - Voice is optional - ignore related warnings if you don't need it
-  - To enable: install `sox` (Linux/macOS) and add Azure keys to `.env`
-
-</details>
-
-<details markdown="2">
-<summary>⚖️ Legal & Ethics</summary>
-
-### 📋 **Disclaimer**
-
-OpenCluely is provided for educational and research purposes. Users are responsible for:
-- Complying with interview guidelines
-- Respecting company policies
-- Understanding legal implications
-- Using ethically and responsibly
-
-### 🔒 **Privacy**
-
-- No data collection or telemetry
-- All processing happens locally
-- API communications are encrypted
-- Session data stays on your device
-
-
-### 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-
-</details>
-
-
-</b>
-
-## 🙏 Acknowledgments
-
-- **Google Gemini**: Powering AI intelligence
-- **Azure Speech**: Optional voice recognition
-- **Electron**: Cross-platform desktop framework
-- **Community**: Amazing contributors and feedback
-
-- **Vysper**: UI and code structure inspiration — see [Vysper by varun-singhh](https://github.com/varun-singhh/Vysper)
-
----
-<div align="center">
-
-
-
-⭐ **Star this repo** if OpenCluely helped you ace your interviews or you vibed with it!
-
-**Made with ❤️ by [TechyCSR](https://techycsr.dev)**
-
-
-</div>
+MIT (see `LICENSE`).
