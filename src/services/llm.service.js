@@ -19,6 +19,7 @@ class LLMService {
     this.modelName = config.get('llm.model') || this.getProviderDefaultModel(this.provider);
     this.authModes = { ...(config.get('llm.authModes') || {}) };
     this.openaiOAuthToken = null;
+    this.providerApiKeys = {};
 
     this.loadOAuthTokenFromDisk();
     this.initializeClient();
@@ -72,6 +73,9 @@ class LLMService {
       return this.openaiOAuthToken;
     }
 
+    const savedKey = String(this.providerApiKeys?.[normalizedProvider] || '').trim();
+    if (savedKey) return savedKey;
+
     return process.env[envMap[normalizedProvider]];
   }
 
@@ -114,21 +118,24 @@ class LLMService {
   readAuthConfig() {
     const filePath = this.getAuthConfigFilePath();
     if (!fs.existsSync(filePath)) {
-      return { tokens: {} };
+      return { tokens: {}, apiKeys: {} };
     }
 
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       if (!parsed || typeof parsed !== 'object') {
-        return { tokens: {} };
+        return { tokens: {}, apiKeys: {} };
       }
       if (!parsed.tokens || typeof parsed.tokens !== 'object') {
         parsed.tokens = {};
       }
+      if (!parsed.apiKeys || typeof parsed.apiKeys !== 'object') {
+        parsed.apiKeys = {};
+      }
       return parsed;
     } catch (error) {
       logger.warn('Failed to parse auth config file', { error: error.message });
-      return { tokens: {} };
+      return { tokens: {}, apiKeys: {} };
     }
   }
 
@@ -145,6 +152,11 @@ class LLMService {
     try {
       const authConfig = this.readAuthConfig();
       this.openaiOAuthToken = String(authConfig.tokens?.openai?.accessToken || '').trim() || null;
+      this.providerApiKeys = {
+        gemini: String(authConfig.apiKeys?.gemini || '').trim(),
+        openai: String(authConfig.apiKeys?.openai || '').trim(),
+        anthropic: String(authConfig.apiKeys?.anthropic || '').trim()
+      };
 
       // Backward compatibility for older single-token file.
       if (!this.openaiOAuthToken) {
@@ -1777,16 +1789,31 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   updateApiKey(newApiKey, provider = this.getCurrentProvider()) {
+    const normalizedProvider = provider === 'codex' ? 'openai' : provider;
     const envKeyMap = {
       gemini: 'GEMINI_API_KEY',
       openai: 'OPENAI_API_KEY',
       anthropic: 'ANTHROPIC_API_KEY'
     };
-    const envKey = envKeyMap[provider] || 'GEMINI_API_KEY';
-    process.env[envKey] = String(newApiKey || '').trim();
+
+    const normalizedKey = String(newApiKey || '').trim();
+    this.providerApiKeys = { ...(this.providerApiKeys || {}), [normalizedProvider]: normalizedKey };
+
+    const authConfig = this.readAuthConfig();
+    authConfig.apiKeys = authConfig.apiKeys || {};
+    if (normalizedKey) {
+      authConfig.apiKeys[normalizedProvider] = normalizedKey;
+    } else {
+      delete authConfig.apiKeys[normalizedProvider];
+    }
+    this.writeAuthConfig(authConfig);
+
+    const envKey = envKeyMap[normalizedProvider] || 'GEMINI_API_KEY';
+    process.env[envKey] = normalizedKey;
+
     this.isInitialized = false;
     this.initializeClient();
-    logger.info('Provider API key updated and client reinitialized', { provider });
+    logger.info('Provider API key updated and client reinitialized', { provider: normalizedProvider });
   }
 
   updateProviderModel(provider, model) {
