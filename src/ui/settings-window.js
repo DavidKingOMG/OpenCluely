@@ -148,7 +148,6 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
     const codexOpenLinkBtn = document.getElementById('codexOpenLinkBtn');
     const llmApiKeyInput = document.getElementById('llmApiKey');
     const windowGapInput = document.getElementById('windowGap');
-    let latestLlmStatus = null;
     const codingLanguageRow = document.getElementById('codingLanguageRow');
     const codingLanguageSelect = document.getElementById('codingLanguage');
     let currentLlmAuthModes = {};
@@ -309,16 +308,17 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
     if (llmProviderSelect && window.electronAPI?.getLlmProviders) {
         const providersConfig = await window.electronAPI.getLlmProviders();
         const status = await window.electronAPI.getLlmStatus();
-        latestLlmStatus = status;
         const authModes = settings.llmAuthModes || status.authModes || {};
         currentLlmAuthModes = authModes;
-        llmProviderSelect.value = settings.llmProvider || 'gemini';
+        llmProviderSelect.value = settings.llmProvider || status.provider || 'gemini';
 
         const provider = llmProviderSelect.value;
         const requiredAuthMode = getProviderRequiredAuthMode(provider);
         const providerLinked = isProviderLinked(provider, status);
+        const lastModels = settings.llmLastModels || status.llmLastModels || {};
+        const preferredModel = lastModels[provider] || settings.llmModel || status.model || null;
 
-        populateModelDropdown(llmModelSelect, providersConfig, provider, providerLinked ? settings.llmModel : null, providerLinked);
+        populateModelDropdown(llmModelSelect, providersConfig, provider, providerLinked ? preferredModel : null, providerLinked);
         toggleLlmAuthUI(provider);
 
         currentLlmAuthModes = { ...currentLlmAuthModes, [provider]: requiredAuthMode };
@@ -406,11 +406,11 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
         const apiKey = authMode === 'apiKey' && llmApiKeyInput ? llmApiKeyInput.value : '';
 
         window.electronAPI.setLlmProviderConfig({ provider, model, authMode, apiKey }).then((status) => {
-            latestLlmStatus = status;
             if (!window.electronAPI?.getLlmProviders) return;
             window.electronAPI.getLlmProviders().then((providersConfig) => {
                 const linked = isProviderLinked(provider, status);
-                populateModelDropdown(llmModelSelect, providersConfig, provider, linked ? status?.model : null, linked);
+                const preferredModel = status?.llmLastModels?.[provider] || status?.model || null;
+                populateModelDropdown(llmModelSelect, providersConfig, provider, linked ? preferredModel : null, linked);
             }).catch(() => {});
         }).catch((error) => {
             console.error('Failed to apply provider config:', error.message);
@@ -500,9 +500,9 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
             const providersConfig = await window.electronAPI.getLlmProviders();
             const status = await window.electronAPI.getLlmStatus();
             const provider = llmProviderSelect.value;
-            latestLlmStatus = status;
             const providerLinked = isProviderLinked(provider, status);
-            populateModelDropdown(llmModelSelect, providersConfig, provider, providerLinked ? status?.model : null, providerLinked);
+            const preferredModel = status?.llmLastModels?.[provider] || null;
+            populateModelDropdown(llmModelSelect, providersConfig, provider, providerLinked ? preferredModel : null, providerLinked);
             toggleLlmAuthUI(provider);
 
             if (provider === 'codex') {

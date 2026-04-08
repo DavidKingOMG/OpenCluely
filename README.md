@@ -1,133 +1,93 @@
 # OpenCluely
 
-OpenCluely is a stealth-style desktop interview assistant built with Electron. It provides real-time help from screenshots and voice transcription, with multi-provider LLM support and in-app onboarding.
+OpenCluely is an Electron desktop assistant for real-time interview support using screenshots and speech transcription, with stealth-style floating windows and multi-provider LLM support.
 
-## What Is New
+## Current Capabilities
 
-- Multi-provider LLM support with runtime switching:
-  - `gemini` (API key)
-  - `openai` (API key)
-  - `codex` (OAuth login flow)
-  - `anthropic` (API key)
-- Startup LLM onboarding modal (provider + model + auth mode).
-- Codex OAuth callback flow integrated in-app (local callback server).
-- Screenshot analysis now uses the currently selected provider and model.
-- STT diagnostics window added with close button and `Esc` support.
-- Improved fallback/error messaging for quota/auth/network issues.
-- Codex request/response compatibility updates:
-  - ChatGPT backend endpoint flow
-  - SSE parsing and stabilization
-  - duplicate response text fix
+- Multi-provider LLM runtime:
+  - `codex` (OAuth)
+  - `openai` (API key mode in-app)
+  - `gemini` (API key mode in-app)
+  - `anthropic` (API key mode in-app)
+- Screenshot analysis uses the currently selected provider and model.
+- Transcription flow with intelligent responses and fallback handling.
+- STT diagnostics window (open from Settings, close button + `Esc`).
+- Session-aware responses and skill-based prompts.
+- Stealth-oriented overlay windows and global shortcut workflow.
 
-## Features
+## Recent Updates
 
-- Stealth overlay windows (floating controls, always-on-top behavior).
-- Screenshot-based question analysis.
-- Optional speech-to-text input.
-- Skill-based prompting (general, programming, dsa, system-design, and more).
-- Session-aware responses.
-- Draggable response/chat windows with markdown rendering.
+- Codex OAuth callback/login flow stabilized.
+- Codex request/response compatibility aligned (including SSE handling).
+- Duplicate response rendering fixed.
+- Provider-model alignment fixed for screenshot/transcription calls.
+- Settings now persist and restore last-used model per provider.
+- Removed `.env`-based setup dependency from runtime docs/flow.
 
 ## Requirements
 
 - Node.js 18+
 - npm
-- Windows/macOS/Linux (Electron-supported)
+- Windows/macOS/Linux
 
 ## Quick Start
-
-1) Clone
 
 ```bash
 git clone https://github.com/DavidKingOMG/OpenCluely.git
 cd OpenCluely
-```
-
-2) Install
-
-```bash
 npm install
-```
-
-3) Run
-
-```bash
 npm start
 ```
 
-On first launch, complete the in-app LLM setup modal.
+On first launch, configure provider/model in-app.
 
-## Configuration
+## In-App Configuration
 
-OpenCluely supports in-app provider setup, plus optional `.env` values.
+All primary configuration is handled in Settings:
 
-### Optional `.env`
+- Select provider and model.
+- Use Codex OAuth login for `codex`.
+- Set speech provider and Whisper/Azure options.
+- Last-used provider/model is automatically remembered.
 
-```env
-# Default startup selection (optional)
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
+## Build Redistributables
 
-# API keys (for API key auth modes)
-GEMINI_API_KEY=your_gemini_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
+### Windows
 
-# Optional speech settings
-AZURE_SPEECH_KEY=your_azure_speech_key
-AZURE_SPEECH_REGION=your_azure_region
-
-# Optional Whisper/runtime tuning (if used by your setup)
-WHISPER_MODEL=ggml-base.en.bin
-WHISPER_INTERVAL_MS=2000
-WHISPER_AUDIO_SOURCE=microphone
-WHISPER_CAPTURE_DEVICE=auto
+```bash
+npm run build:win
 ```
 
-## Provider/Auth Behavior
+Typical artifacts in `dist/`:
 
-- `codex` uses OAuth mode and a local callback flow.
-- `openai`, `gemini`, and `anthropic` use API key mode.
-- Model selection is validated against the selected provider.
-- Screenshot and transcription requests use the active provider/model pair.
+- `OpenCluely Setup 1.0.0.exe` (NSIS installer)
+- `OpenCluely 1.0.0.exe` (portable)
 
-## STT Diagnostics
+If NSIS output is locked by another process, you can still build portable directly:
 
-You can open STT diagnostics from Settings.
+```bash
+npx electron-builder --win portable --x64 --ia32
+```
 
-- Shows current STT health/details.
-- Close via button or `Esc`.
+### Other Platforms
 
-## Keyboard Shortcuts
+```bash
+npm run build:mac
+npm run build:linux
+```
 
-Common defaults include:
+## Project Structure
 
-- Screenshot capture
-- Toggle speech recording
-- Toggle interaction mode
-- Open chat/settings
+- `main.js` - main process app orchestration and IPC
+- `src/services/llm.service.js` - provider request/response handling
+- `src/services/speech.service.js` - speech providers and diagnostics
+- `src/ui/settings-window.js` - settings UI behavior and persistence wiring
+- `src/core/config.js` - base runtime config and provider model lists
 
-(Exact bindings may vary by platform/window context.)
+## Security
 
-## Troubleshooting
-
-- If provider calls fail, check provider auth mode and credentials in Settings.
-- If Codex OAuth succeeds but requests fail, re-run login and confirm selected model is a Codex-supported model.
-- If speech is unavailable, app still works with screenshot + typed workflows.
-
-## Security and Privacy
-
-- Keep `.env` out of version control.
 - Do not commit API keys, OAuth tokens, or personal credentials.
-- This repository includes `env.example` as a template only.
-
-## Development Notes
-
-- Main process: `main.js`
-- LLM integration: `src/services/llm.service.js`
-- Core config/provider models: `src/core/config.js`
-- Settings UI logic: `src/ui/settings-window.js`
-- STT diagnostics UI: `stt-diagnostics.html`, `src/ui/stt-diagnostics-window.js`
+- Keep local auth/config files private on your machine.
 
 ## License
 

@@ -1,5 +1,3 @@
-require("dotenv").config();
-
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
@@ -34,6 +32,7 @@ class ApplicationController {
     this.pendingCodexOAuth = null;
     this.codexCallbackPort = null;
     this._oauthRetriedWithEphemeral = false;
+    this.llmLastModels = {};
 
 
     // Window configurations for reference
@@ -300,20 +299,7 @@ class ApplicationController {
       speechService.stopRecording();
     });
 
-    ipcMain.on("chat-window-ready", () => {
-      // Send a test message to confirm communication
-      setTimeout(() => {
-        windowManager.broadcastToAllWindows("transcription-received", {
-          text: "Test message from main process - chat window communication is working!",
-        });
-      }, 1000);
-    });
 
-    ipcMain.on("test-chat-window", () => {
-      windowManager.broadcastToAllWindows("transcription-received", {
-        text: "🧪 IMMEDIATE TEST: Chat window IPC communication test successful!",
-      });
-    });
 
     ipcMain.handle("show-all-windows", () => {
       windowManager.showAllWindows();
@@ -449,9 +435,12 @@ class ApplicationController {
         llmService.updateApiKey(apiKey, provider);
       }
 
+      const resolvedModel = llmService.getCurrentModel();
+      this.llmLastModels = { ...(this.llmLastModels || {}), [provider]: resolvedModel };
       this.saveSettings({
         llmProvider: provider,
-        llmModel: llmService.getCurrentModel(),
+        llmModel: resolvedModel,
+        llmLastModels: this.llmLastModels,
         llmAuthModes: llmService.getAuthModes(),
         firstRunCompleted: true
       });
@@ -491,8 +480,10 @@ class ApplicationController {
       }
       llmService.setProviderAuthMode('openai', 'oauth');
       llmService.setCodexAuthToken(token.trim());
-      this.saveSettings({ llmAuthModes: llmService.getAuthModes(), firstRunCompleted: true });
-      return { success: true, status: llmService.getStats() };
+      const codexModel = llmService.getCurrentModel();
+      this.llmLastModels = { ...(this.llmLastModels || {}), codex: codexModel };
+      this.saveSettings({ llmAuthModes: llmService.getAuthModes(), llmLastModels: this.llmLastModels, firstRunCompleted: true });
+      return { success: true, status: { ...llmService.getStats(), llmLastModels: this.llmLastModels } };
     });
 
     // Backward-compatible aliases
@@ -815,8 +806,7 @@ class ApplicationController {
       try {
         const activePort = this.codexCallbackPort || requestedPort;
         const rawRequestUrl = String(req.url || '/');
-        const requestUrl = new URL(rawRequestUrl, `http://localhost:${activePort}`);
-        const normalizedPath = String(requestUrl.pathname || '/').replace(/\/+$/, '') || '/';
+        new URL(rawRequestUrl, `http://localhost:${activePort}`);
 
         // Parse query from raw request URL first to avoid runtime URL/searchParams edge cases.
         const queryIndex = rawRequestUrl.indexOf('?');
@@ -1376,6 +1366,7 @@ class ApplicationController {
       selectedIcon: this.appIcon || "terminal",
       llmProvider: this.llmProvider || config.get('llm.provider') || 'gemini',
       llmModel: this.llmModel || config.get('llm.model') || 'gemini-2.5-flash',
+      llmLastModels: this.llmLastModels || {},
       llmAuthModes: this.llmAuthModes || llmService.getAuthModes(),
       firstRunCompleted: !!this.firstRunCompleted,
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
@@ -1410,12 +1401,17 @@ class ApplicationController {
         this.appIcon = settings.appIcon;
       }
 
+      if (settings.llmLastModels && typeof settings.llmLastModels === 'object') {
+        this.llmLastModels = { ...(this.llmLastModels || {}), ...settings.llmLastModels };
+      }
+
       if (settings.llmProvider || settings.llmModel) {
         const provider = settings.llmProvider || this.llmProvider || config.get('llm.provider') || 'gemini';
-        const model = settings.llmModel || this.llmModel || config.get('llm.model') || null;
+        const model = settings.llmModel || this.llmModel || this.llmLastModels?.[provider] || config.get('llm.model') || null;
         this.llmProvider = provider;
         this.llmModel = model;
         llmService.updateProviderModel(provider, model);
+        this.llmLastModels = { ...(this.llmLastModels || {}), [provider]: llmService.getCurrentModel() };
       }
 
       if (settings.llmAuthModes && typeof settings.llmAuthModes === 'object') {
@@ -1528,6 +1524,7 @@ class ApplicationController {
         this.appIcon = saved.selectedIcon || saved.appIcon || this.appIcon;
         this.llmProvider = saved.llmProvider || this.llmProvider;
         this.llmModel = saved.llmModel || this.llmModel;
+        this.llmLastModels = saved.llmLastModels || this.llmLastModels || {};
         this.llmAuthModes = saved.llmAuthModes || config.get('llm.authModes') || { gemini: 'apiKey', openai: 'apiKey', anthropic: 'apiKey' };
         this.firstRunCompleted = !!saved.firstRunCompleted;
         this.speechProvider = saved.speechProvider || this.speechProvider || 'azure';
@@ -1559,11 +1556,14 @@ class ApplicationController {
       }
 
       this.llmProvider = this.llmProvider || config.get('llm.provider') || 'gemini';
-      this.llmModel = this.llmModel || config.get('llm.model') || null;
+      this.llmLastModels = this.llmLastModels || {};
+      this.llmModel = this.llmModel || this.llmLastModels[this.llmProvider] || config.get('llm.model') || null;
       this.llmAuthModes = this.llmAuthModes || config.get('llm.authModes') || { gemini: 'apiKey', openai: 'apiKey', anthropic: 'apiKey' };
 
       llmService.setAuthModes(this.llmAuthModes);
       llmService.updateProviderModel(this.llmProvider, this.llmModel);
+      this.llmLastModels[this.llmProvider] = llmService.getCurrentModel();
+      this.llmModel = llmService.getCurrentModel();
 
       logger.info('Loaded startup/provider settings', {
         llmProvider: this.llmProvider,
