@@ -1084,7 +1084,7 @@ class ApplicationController {
 
   async startSnipCapture() {
     const overlay = await windowManager.createSnipOverlayWindow();
-    const display = captureService._getTargetDisplay?.() || screen.getPrimaryDisplay();
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     this.activeSnipSession = { displayId: display.id, startedAt: Date.now() };
     overlay.setBounds(display.bounds);
     overlay.showInactive();
@@ -1102,14 +1102,26 @@ class ApplicationController {
     }
 
     const { displayId } = this.activeSnipSession;
-    const result = await captureService.captureAndProcess({
-      displayId,
-      area: payload.area
-    });
+    const overlay = windowManager.getWindow('snipOverlay');
 
-    await this.processCapturedImageWithLLM(result);
-    await this.cancelSnipCapture({ silent: true });
-    return { success: true };
+    try {
+      if (overlay && !overlay.isDestroyed()) {
+        overlay.hide();
+      }
+
+      const result = await captureService.captureAndProcess({
+        displayId,
+        area: payload.area
+      });
+
+      await this.processCapturedImageWithLLM(result);
+      return { success: true };
+    } finally {
+      this.activeSnipSession = null;
+      if (overlay && !overlay.isDestroyed()) {
+        overlay.hide();
+      }
+    }
   }
 
   async cancelSnipCapture(options = {}) {
