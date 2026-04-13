@@ -84,6 +84,22 @@ class WindowManager {
         alwaysOnTop: true,
         visibleOnAllWorkspaces: true,
         fullscreenable: false
+      },
+      snipOverlay: {
+        width: 800,
+        height: 600,
+        file: 'snip-overlay.html',
+        title: 'Snip Overlay',
+        frame: false,
+        transparent: true,
+        skipTaskbar: true,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        alwaysOnTop: true,
+        visibleOnAllWorkspaces: true,
+        fullscreenable: false
       }
     };
 
@@ -109,6 +125,7 @@ class WindowManager {
       await this.createLLMResponseWindow();
       await this.createSettingsWindow();
       await this.createSTTDiagnosticsWindow();
+      await this.createSnipOverlayWindow();
       
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
@@ -216,6 +233,16 @@ class WindowManager {
     }
     const window = await this.createWindow('sttDiagnostics');
     this.windows.set('sttDiagnostics', window);
+    window.hide();
+    return window;
+  }
+
+  async createSnipOverlayWindow() {
+    if (this.windows.has('snipOverlay')) {
+      return this.windows.get('snipOverlay');
+    }
+    const window = await this.createWindow('snipOverlay');
+    this.windows.set('snipOverlay', window);
     window.hide();
     return window;
   }
@@ -369,6 +396,28 @@ class WindowManager {
           trafficLightPosition: { x: -100, y: -100 },
           type: 'panel',
           acceptFirstMouse: true
+        }),
+        level: process.platform === 'darwin' ? 'floating' : undefined,
+      };
+    } else if (type === 'snipOverlay') {
+      browserWindowOptions = {
+        ...baseOptions,
+        frame: false,
+        titleBarStyle: 'hidden',
+        transparent: true,
+        backgroundColor: '#00000000',
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        hasShadow: false,
+        thickFrame: false,
+        ...(process.platform === 'darwin' && {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: -100, y: -100 },
+          type: 'panel',
+          acceptFirstMouse: true,
+          disableAutoHideCursor: true
         }),
         level: process.platform === 'darwin' ? 'floating' : undefined,
       };
@@ -971,7 +1020,7 @@ class WindowManager {
     }
 
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse' && type !== 'sttDiagnostics') { // Keep diagnostics opt-in only
+      if (type !== 'llmResponse' && type !== 'sttDiagnostics' && type !== 'snipOverlay') { // Keep opt-in windows hidden
         this.showOnCurrentDesktop(window);
       }
     });
@@ -1553,6 +1602,10 @@ class WindowManager {
           case 'sttDiagnostics':
             newX = displayX + (displayWidth - windowWidth) / 2;
             newY = displayY + topMargin + 40;
+            break;
+          case 'snipOverlay':
+            newX = displayX + (displayWidth - windowWidth) / 2;
+            newY = displayY + topMargin;
             break;
           default:
 

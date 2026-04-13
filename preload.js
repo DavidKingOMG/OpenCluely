@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openSTTDiagnostics: () => ipcRenderer.invoke('open-stt-diagnostics'),
   closeSTTDiagnostics: () => ipcRenderer.invoke('close-stt-diagnostics'),
   getSTTDiagnostics: () => ipcRenderer.invoke('get-stt-diagnostics'),
+  startSnipCapture: () => ipcRenderer.invoke('start-snip-capture'),
+  submitSnipSelection: (payload) => ipcRenderer.invoke('submit-snip-selection', payload),
+  cancelSnipCapture: () => ipcRenderer.invoke('cancel-snip-capture'),
+  onSnipCaptureState: (callback) => ipcRenderer.on('snip-capture-state', callback),
   getWhisperCaptureDevices: (source = 'microphone') => ipcRenderer.invoke('get-whisper-capture-devices', source),
   
   // Session memory
