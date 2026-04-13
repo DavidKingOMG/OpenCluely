@@ -1109,6 +1109,8 @@ class ApplicationController {
         overlay.hide();
       }
 
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       const result = await captureService.captureAndProcess({
         displayId,
         area: payload.area
@@ -1116,6 +1118,24 @@ class ApplicationController {
 
       await this.processCapturedImageWithLLM(result);
       return { success: true };
+    } catch (error) {
+      logger.error("Snip capture process failed", {
+        error: error.message,
+      });
+
+      windowManager.hideLLMResponse();
+      this.broadcastOCRError(error.message);
+
+      sessionManager.addConversationEvent({
+        role: 'system',
+        content: `Snip capture failed: ${error.message}`,
+        action: 'ocr_error',
+        metadata: {
+          error: error.message
+        }
+      });
+
+      return { success: false, error: error.message };
     } finally {
       this.activeSnipSession = null;
       if (overlay && !overlay.isDestroyed()) {
