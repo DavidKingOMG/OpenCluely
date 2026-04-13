@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
-const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
+const { app, BrowserWindow, globalShortcut, session, ipcMain, screen } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
 
@@ -19,6 +19,7 @@ class ApplicationController {
   constructor() {
     this.isReady = false;
     this.activeSkill = "general";
+    this.activeSnipSession = null;
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
@@ -261,6 +262,9 @@ class ApplicationController {
       }
   });
   ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
+  ipcMain.handle("start-snip-capture", () => this.startSnipCapture());
+  ipcMain.handle("submit-snip-selection", (event, payload) => this.submitSnipSelection(payload));
+  ipcMain.handle("cancel-snip-capture", () => this.cancelSnipCapture());
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
     
@@ -1056,34 +1060,7 @@ class ApplicationController {
         hasCredentials: llmStatus.hasApiKey
       });
 
-      const sessionHistory = sessionManager.getOptimizedHistory();
-
-      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
-      const llmResult = await llmService.processImageWithSkill(
-        capture.imageBuffer,
-        capture.mimeType || 'image/png',
-        this.activeSkill,
-        sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null
-      );
-
-      // Record model response in session
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-
+      const llmResult = await this.processCapturedImageWithLLM(capture);
       this.broadcastLLMSuccess(llmResult);
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
@@ -1103,6 +1080,73 @@ class ApplicationController {
         }
       });
     }
+  }
+
+  async startSnipCapture() {
+    const overlay = await windowManager.createSnipOverlayWindow();
+    const display = captureService._getTargetDisplay?.() || screen.getPrimaryDisplay();
+    this.activeSnipSession = { displayId: display.id, startedAt: Date.now() };
+    overlay.setBounds(display.bounds);
+    overlay.showInactive();
+    overlay.webContents.send('snip-capture-state', {
+      phase: 'started',
+      displayId: display.id,
+      bounds: display.bounds
+    });
+    return { success: true, displayId: display.id };
+  }
+
+  async submitSnipSelection(payload = {}) {
+    if (!this.activeSnipSession) {
+      return { success: false, error: 'No active snip session' };
+    }
+
+    const { displayId } = this.activeSnipSession;
+    const result = await captureService.captureAndProcess({
+      displayId,
+      area: payload.area
+    });
+
+    await this.processCapturedImageWithLLM(result);
+    await this.cancelSnipCapture({ silent: true });
+    return { success: true };
+  }
+
+  async cancelSnipCapture(options = {}) {
+    const overlay = windowManager.getWindow('snipOverlay');
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.hide();
+      overlay.webContents.send('snip-capture-state', { phase: 'cancelled' });
+    }
+    this.activeSnipSession = null;
+    return { success: true, silent: !!options.silent };
+  }
+
+  async processCapturedImageWithLLM(captureResult) {
+    const sessionHistory = sessionManager.getOptimizedHistory();
+    const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
+    const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+
+    const llmResult = await llmService.processImageWithSkill(
+      captureResult.imageBuffer,
+      captureResult.mimeType || 'image/png',
+      this.activeSkill,
+      sessionHistory.recent,
+      needsProgrammingLanguage ? this.codingLanguage : null
+    );
+    sessionManager.addModelResponse(llmResult.response, {
+      source: 'screenshot',
+      processingTime: llmResult.metadata.processingTime,
+      usedFallback: llmResult.metadata.usedFallback,
+      isImageAnalysis: true
+    });
+    windowManager.showLLMResponse(llmResult.response, {
+      source: 'screenshot',
+      processingTime: llmResult.metadata.processingTime,
+      usedFallback: llmResult.metadata.usedFallback,
+      isImageAnalysis: true
+    });
+    return llmResult;
   }
 
   async processWithLLM(text, sessionHistory) {
