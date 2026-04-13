@@ -2,6 +2,7 @@ class SnipOverlayWindowUI {
   constructor() {
     this.root = document.getElementById('snipRoot');
     this.captureHidden = false;
+    this.activeSessionId = null;
     this.bindEvents();
   }
 
@@ -12,10 +13,14 @@ class SnipOverlayWindowUI {
 
     window.electronAPI.onSnipCaptureState((event, payload = {}) => {
       if (payload.phase === 'prepare-to-capture') {
-        this.hideForCapture(payload);
+        if (!this.activeSessionId || payload.sessionId === this.activeSessionId) {
+          this.hideForCapture(payload);
+        }
       } else if (payload.phase === 'started') {
+        this.activeSessionId = payload.sessionId || null;
         this.showOverlay();
       } else if (payload.phase === 'cancelled') {
+        this.activeSessionId = null;
         this.showOverlay();
       }
     });
@@ -28,6 +33,7 @@ class SnipOverlayWindowUI {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         window.electronAPI.notifySnipOverlayHidden({
+          sessionId: payload.sessionId,
           displayId: payload.displayId
         });
       });

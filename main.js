@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const crypto = require("crypto");
 const { app, BrowserWindow, globalShortcut, session, ipcMain, screen } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
@@ -1085,15 +1086,17 @@ class ApplicationController {
   async startSnipCapture() {
     const overlay = await windowManager.createSnipOverlayWindow();
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    this.activeSnipSession = { displayId: display.id, startedAt: Date.now() };
+    const sessionId = crypto.randomUUID();
+    this.activeSnipSession = { displayId: display.id, startedAt: Date.now(), sessionId };
     overlay.setBounds(display.bounds);
     overlay.showInactive();
     overlay.webContents.send('snip-capture-state', {
       phase: 'started',
+      sessionId,
       displayId: display.id,
       bounds: display.bounds
     });
-    return { success: true, displayId: display.id };
+    return { success: true, displayId: display.id, sessionId };
   }
 
   async submitSnipSelection(payload = {}) {
@@ -1101,17 +1104,20 @@ class ApplicationController {
       return { success: false, error: 'No active snip session' };
     }
 
-    const { displayId } = this.activeSnipSession;
+    const { displayId, sessionId } = this.activeSnipSession;
     const overlay = windowManager.getWindow('snipOverlay');
 
     try {
       if (overlay && !overlay.isDestroyed()) {
+        const overlayHiddenAck = this.waitForSnipOverlayAck(sessionId);
         overlay.webContents.send('snip-capture-state', {
           phase: 'prepare-to-capture',
+          sessionId,
           displayId
         });
 
-        await this.waitForSnipOverlayHidden(displayId);
+        await overlayHiddenAck;
+        await this.hideSnipOverlayWindowAndWait(overlay);
       }
 
       const result = await captureService.captureAndProcess({
@@ -1147,7 +1153,7 @@ class ApplicationController {
   async cancelSnipCapture(options = {}) {
     const overlay = windowManager.getWindow('snipOverlay');
     if (overlay && !overlay.isDestroyed()) {
-      overlay.hide();
+      await this.hideSnipOverlayWindowAndWait(overlay);
       if (!options.silent) {
         overlay.webContents.send('snip-capture-state', { phase: 'cancelled' });
       }
@@ -1156,7 +1162,7 @@ class ApplicationController {
     return { success: true, silent: !!options.silent };
   }
 
-  waitForSnipOverlayHidden(displayId, timeoutMs = 1000) {
+  waitForSnipOverlayAck(sessionId, timeoutMs = 1000) {
     return new Promise((resolve, reject) => {
       let settled = false;
 
@@ -1170,7 +1176,7 @@ class ApplicationController {
       };
 
       const handleHidden = (event, payload = {}) => {
-        if (displayId != null && payload.displayId != null && payload.displayId !== displayId) {
+        if (sessionId != null && payload.sessionId != null && payload.sessionId !== sessionId) {
           return;
         }
         cleanup();
@@ -1183,6 +1189,44 @@ class ApplicationController {
       }, timeoutMs);
 
       ipcMain.on('snip-overlay-hidden', handleHidden);
+    });
+  }
+
+  hideSnipOverlayWindowAndWait(overlay, timeoutMs = 1000) {
+    return new Promise((resolve, reject) => {
+      if (!overlay || overlay.isDestroyed()) {
+        resolve();
+        return;
+      }
+
+      if (!overlay.isVisible()) {
+        resolve();
+        return;
+      }
+
+      let settled = false;
+
+      const cleanup = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        overlay.removeListener('hide', handleHide);
+      };
+
+      const handleHide = () => {
+        cleanup();
+        resolve();
+      };
+
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for snip overlay window to hide'));
+      }, timeoutMs);
+
+      overlay.once('hide', handleHide);
+      overlay.hide();
     });
   }
 
