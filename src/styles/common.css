@@ -13,6 +13,38 @@ body {
     cursor: default;
 }
 
+body.snip-overlay-body {
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+}
+
+body.snip-overlay-body * {
+    -webkit-user-drag: none;
+}
+
+.snip-overlay-root {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: auto;
+    touch-action: none;
+    background: rgba(0, 0, 0, 0.015);
+}
+
+.snip-selection {
+    position: absolute;
+    display: none;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    background: rgba(255, 255, 255, 0.035);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.22) inset,
+        0 0 0 1px rgba(255, 255, 255, 0.04);
+    border-radius: 2px;
+    backdrop-filter: blur(0.5px);
+}
+
 /* Common container styles */
 .app-container {
     width: 100%;
