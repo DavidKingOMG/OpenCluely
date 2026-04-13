@@ -1135,13 +1135,13 @@ class ApplicationController {
       needsProgrammingLanguage ? this.codingLanguage : null
     );
     sessionManager.addModelResponse(llmResult.response, {
-      source: 'screenshot',
+      skill: this.activeSkill,
       processingTime: llmResult.metadata.processingTime,
       usedFallback: llmResult.metadata.usedFallback,
       isImageAnalysis: true
     });
     windowManager.showLLMResponse(llmResult.response, {
-      source: 'screenshot',
+      skill: this.activeSkill,
       processingTime: llmResult.metadata.processingTime,
       usedFallback: llmResult.metadata.usedFallback,
       isImageAnalysis: true
