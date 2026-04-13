@@ -1106,10 +1106,13 @@ class ApplicationController {
 
     try {
       if (overlay && !overlay.isDestroyed()) {
-        overlay.hide();
-      }
+        overlay.webContents.send('snip-capture-state', {
+          phase: 'prepare-to-capture',
+          displayId
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.waitForSnipOverlayHidden(displayId);
+      }
 
       const result = await captureService.captureAndProcess({
         displayId,
@@ -1137,10 +1140,7 @@ class ApplicationController {
 
       return { success: false, error: error.message };
     } finally {
-      this.activeSnipSession = null;
-      if (overlay && !overlay.isDestroyed()) {
-        overlay.hide();
-      }
+      await this.cancelSnipCapture({ silent: true });
     }
   }
 
@@ -1148,10 +1148,42 @@ class ApplicationController {
     const overlay = windowManager.getWindow('snipOverlay');
     if (overlay && !overlay.isDestroyed()) {
       overlay.hide();
-      overlay.webContents.send('snip-capture-state', { phase: 'cancelled' });
+      if (!options.silent) {
+        overlay.webContents.send('snip-capture-state', { phase: 'cancelled' });
+      }
     }
     this.activeSnipSession = null;
     return { success: true, silent: !!options.silent };
+  }
+
+  waitForSnipOverlayHidden(displayId, timeoutMs = 1000) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
+      const cleanup = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        ipcMain.removeListener('snip-overlay-hidden', handleHidden);
+      };
+
+      const handleHidden = (event, payload = {}) => {
+        if (displayId != null && payload.displayId != null && payload.displayId !== displayId) {
+          return;
+        }
+        cleanup();
+        resolve();
+      };
+
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for snip overlay to hide'));
+      }, timeoutMs);
+
+      ipcMain.on('snip-overlay-hidden', handleHidden);
+    });
   }
 
   async processCapturedImageWithLLM(captureResult) {
