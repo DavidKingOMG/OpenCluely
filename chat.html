@@ -34,7 +34,7 @@
         box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
         display: flex;
         flex-direction: column;
-        -webkit-app-region: drag;
+        -webkit-app-region: no-drag;
       }
       .chat-header {
         padding: 16px 20px;
@@ -42,10 +42,10 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        -webkit-app-region: drag;
+        -webkit-app-region: no-drag;
         background: rgba(0, 0, 0, 0.2);
         backdrop-filter: blur(10px);
-        cursor: move;
+        cursor: default;
         flex-shrink: 0;
       }
       .header-title {
@@ -70,12 +70,12 @@
         color: rgba(255, 255, 255, 0.9);
         border-radius: 6px;
         padding: 6px 10px;
-        cursor: pointer;
-        transition: all 0.2s ease;
+        cursor: default;
+        transition: none;
       }
       .icon-button:hover {
-        background: rgba(255, 255, 255, 0.22);
-        color: #fff;
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.9);
       }
       .recording-indicator {
         width: 8px;
@@ -288,9 +288,9 @@
         padding: 4px 8px;
         font-size: 11px;
         border-radius: 4px;
-        cursor: pointer;
+        cursor: default;
         -webkit-app-region: no-drag;
-        transition: background 0.2s ease, border-color 0.2s ease, transform 0.12s ease;
+        transition: none;
       }
       .copy-btn:hover {
         background: rgba(0,0,0,0.7);
@@ -450,13 +450,13 @@
         border-radius: 6px;
         padding: 6px 10px;
         color: rgba(255, 255, 255, 0.9);
-        cursor: pointer;
-        transition: all 0.2s;
+        cursor: default;
+        transition: none;
         -webkit-app-region: no-drag;
       }
       .send-button:hover {
-        background: rgba(255, 255, 255, 0.25);
-        color: rgba(255, 255, 255, 1);
+        background: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.9);
       }
       .status-message {
         text-align: center;
@@ -479,13 +479,13 @@
         border-radius: 6px;
         padding: 6px 10px;
         color: rgba(255, 255, 255, 0.9);
-        cursor: pointer;
-        transition: all 0.2s;
+        cursor: default;
+        transition: none;
         -webkit-app-region: no-drag;
       }
       .mic-button:hover {
-        background: rgba(255, 255, 255, 0.25);
-        color: rgba(255, 255, 255, 1);
+        background: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.9);
       }
       .mic-button.recording {
         background: rgba(255, 71, 87, 0.8);
@@ -518,6 +518,42 @@
       }
       .interaction-indicator.show {
         opacity: 1;
+      }
+
+      /* Overlay opacity bindings */
+      .chat-container {
+        background: var(--overlay-shell-bg) !important;
+        border-color: var(--overlay-border) !important;
+      }
+
+      .chat-header,
+      .chat-input,
+      .input-container {
+        background: var(--overlay-panel-bg) !important;
+        border-color: var(--overlay-border) !important;
+      }
+
+      .message,
+      .code-content,
+      .message.assistant pre,
+      .message.assistant code,
+      .copy-btn,
+      .icon-button,
+      .send-button,
+      .mic-button {
+        background: var(--overlay-chip-bg) !important;
+        border-color: var(--overlay-border) !important;
+      }
+
+      .header-title,
+      .message-text,
+      .status-message,
+      .help-text,
+      .input-field,
+      .icon-button,
+      .send-button,
+      .mic-button {
+        color: var(--overlay-text-color) !important;
       }
       .interaction-indicator.interactive {
         background: rgba(76, 175, 80, 0.9);
@@ -688,6 +724,11 @@
       <div class="chat-messages" id="chatMessages"></div>
 
       <div class="chat-input">
+        <div id="bypassRow" class="bypass-row stealth-no-select">
+          <button class="bypass-button" data-bypass="1">Bypass 1</button>
+          <button class="bypass-button" data-bypass="2">Bypass 2</button>
+          <button class="bypass-button" data-bypass="3">Bypass 3</button>
+        </div>
         <div class="input-container">
           <textarea
             class="input-field"
@@ -729,12 +770,18 @@
 
       let isRecording = false;
       let isInteractive = true;
+      let bypassInFlight = false;
       let listeningStartTime = null;
       let listeningTimer = null;
       let speechAvailable = false;
 
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
+      const BYPASS_PROMPTS = {
+        1: 'Bypass 1',
+        2: 'Bypass 2',
+        3: 'Bypass 3'
+      };
       let chatHistory = [];
       const recentResponseHashes = new Set();
       const RECENT_HASH_LIMIT = 50;
@@ -815,6 +862,25 @@
         whysperAPI.onSpeechAvailability((event, data) => {
           speechAvailable = !!(data && data.available);
           applyMicVisibility();
+        });
+      }
+
+      if (whysperAPI && whysperAPI.onInteractionModeChanged) {
+        whysperAPI.onInteractionModeChanged((event, interactive) => {
+          isInteractive = !!interactive;
+          if (isInteractive) {
+            chatContainer && chatContainer.classList.remove('non-interactive');
+          } else {
+            chatContainer && chatContainer.classList.add('non-interactive');
+          }
+        });
+      }
+
+      if (whysperAPI && whysperAPI.onOverlayOpacityChanged) {
+        whysperAPI.onOverlayOpacityChanged((event, data) => {
+          const value = Number(data?.value);
+          const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+          document.documentElement.style.setProperty('--overlay-surface-opacity', String(opacity));
         });
       }
       
@@ -1206,6 +1272,54 @@
         clearHistoryBtn.addEventListener('click', () => clearChatHistory());
       }
 
+      async function submitChatMessage(text, displayText = text, immediateThinking = false) {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return;
+
+        addMessage(displayText, 'user');
+
+        if (immediateThinking) {
+          showThinkingIndicator();
+        } else {
+          setTimeout(() => {
+            showThinkingIndicator();
+          }, 300);
+        }
+
+        try {
+          if (whysperAPI && whysperAPI.sendChatMessage) {
+            await whysperAPI.sendChatMessage(trimmed);
+          }
+        } catch (error) {
+          console.error('Failed to send chat message to main process:', error);
+        }
+      }
+
+      document.querySelectorAll('.bypass-button').forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (!isInteractive || bypassInFlight) {
+            return;
+          }
+
+          const key = Number(button.dataset.bypass);
+          const text = BYPASS_PROMPTS[key];
+          if (!text) return;
+
+          bypassInFlight = true;
+          try {
+            await submitChatMessage(text, button.textContent.trim(), true);
+          } finally {
+            bypassInFlight = false;
+          }
+        });
+      });
+
+      document.querySelectorAll('.bypass-button').forEach((button) => {
+        button.addEventListener('mouseenter', () => {
+          button.style.cursor = 'default';
+        });
+      });
+
       if (micButton) {
         micButton.addEventListener('click', async () => {
           if (!isInteractive) {
@@ -1237,22 +1351,8 @@
         sendButton.addEventListener('click', async () => {
           const text = messageInput.value.trim();
           if (text) {
-            addMessage(text, 'user');
             messageInput.value = '';
-            
-            // Show thinking indicator after user message
-            setTimeout(() => {
-              showThinkingIndicator();
-            }, 300);
-            
-            // Send to main process for session memory storage and LLM processing
-            try {
-              if (whysperAPI && whysperAPI.sendChatMessage) {
-                await whysperAPI.sendChatMessage(text);
-              }
-            } catch (error) {
-              console.error('Failed to send chat message to main process:', error);
-            }
+            await submitChatMessage(text, text, false);
           }
         });
       }
@@ -1276,17 +1376,9 @@
             e.preventDefault();
             const text = messageInput.value.trim();
             if (text) {
-              addMessage(text, 'user');
               messageInput.value = '';
               autoGrow(messageInput);
-              setTimeout(() => { showThinkingIndicator(); }, 300);
-              try {
-                if (whysperAPI && whysperAPI.sendChatMessage) {
-                  await whysperAPI.sendChatMessage(text);
-                }
-              } catch (error) {
-                console.error('Failed to send chat message to main process:', error);
-              }
+              await submitChatMessage(text, text, false);
             }
           }
           // If Shift+Enter, allow default to insert newline

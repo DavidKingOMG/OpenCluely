@@ -10,8 +10,17 @@
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
     <style>
+        :root {
+            --overlay-surface-opacity: 0.82;
+            --overlay-shell-bg: rgba(10, 14, 18, var(--overlay-surface-opacity));
+            --overlay-panel-bg: rgba(18, 24, 30, var(--overlay-surface-opacity));
+            --overlay-chip-bg: rgba(30, 38, 46, calc(var(--overlay-surface-opacity) * 0.92));
+            --overlay-border: rgba(255, 255, 255, 0.08);
+            --overlay-text-color: rgba(255, 255, 255, 0.96);
+        }
+
         body {
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0%, rgba(20, 20, 20, 0.5) 100%);;
+            background: var(--overlay-shell-bg);
             -webkit-app-region: no-drag;
             color: white;
             margin: 0;
@@ -116,10 +125,10 @@
 
         .full-content-inner {
             height: 100%;
-            background-color: rgba(255, 255, 255, 0.05);
+            background-color: var(--overlay-panel-bg);
             backdrop-filter: blur(10px);
             border-radius: 0.5rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--overlay-border);
             overflow-y: auto;
             overflow-x: auto;
             padding: 1rem;
@@ -144,10 +153,10 @@
 
         /* Code block styling */
         .code-block {
-            background-color: rgba(0, 0, 0, 0.3); 
+            background-color: var(--overlay-chip-bg); 
             margin-bottom: 1rem;
             border-radius: 0.5rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--overlay-border);
         }
         .code-header {
             background-color: rgba(0, 0, 0, 0.4);
@@ -330,9 +339,9 @@
             justify-content: space-between;
             padding: 0 10px;
             box-sizing: border-box;
-            background: linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%);
+            background: var(--overlay-panel-bg);
             backdrop-filter: blur(10px);
-            border-bottom: 1px solid rgba(255,255,255,0.12);
+            border-bottom: 1px solid var(--overlay-border);
             z-index: 50;
             color: #e5e7eb;
             font-size: 12px;
@@ -355,17 +364,17 @@
             align-items: center;
             justify-content: center;
             border-radius: 4px;
-            background: rgba(255,255,255,0.06);
+            background: var(--overlay-chip-bg);
             color: #e5e7eb;
-            border: 1px solid rgba(255,255,255,0.12);
+            border: 1px solid var(--overlay-border);
             cursor: pointer;
             transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
             font-weight: 600;
             line-height: 1;
         }
         .window-btn:hover {
-            background: rgba(255,255,255,0.12);
-            border-color: rgba(255,255,255,0.2);
+            background: var(--overlay-chip-bg);
+            border-color: var(--overlay-border);
         }
         .window-btn-close:hover {
             background: rgba(239, 68, 68, 0.25);
@@ -388,9 +397,9 @@
             position: absolute; 
             top: 6px; 
             right: 6px; 
-            background: rgba(0,0,0,0.5); 
+            background: var(--overlay-chip-bg); 
             color: rgba(255,255,255,0.9); 
-            border: 1px solid rgba(255,255,255,0.2); 
+            border: 1px solid var(--overlay-border); 
             padding: 4px 8px; 
             font-size: 11px; 
             border-radius: 4px; 
@@ -398,7 +407,7 @@
             -webkit-app-region: no-drag; 
             transition: background 0.2s ease, border-color 0.2s ease, transform 0.12s ease;
         }
-        .copy-btn:hover { background: rgba(0,0,0,0.7); }
+        .copy-btn:hover { background: var(--overlay-chip-bg); }
         .copy-btn.copied { 
             background: rgba(76,175,80,0.85); 
             border-color: rgba(76,175,80,0.95); 
@@ -416,11 +425,24 @@
             font-size: 10px;
             line-height: 1.2;
             color: rgba(255, 255, 255, 0.92);
-            background: rgba(0, 0, 0, 0.35);
-            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: var(--overlay-chip-bg);
+            border: 1px solid var(--overlay-border);
             backdrop-filter: blur(6px);
             pointer-events: none;
             user-select: none;
+        }
+
+        .loading,
+        .loading-compact,
+        #response-content,
+        .panel-content,
+        .text-panel,
+        .code-panel,
+        .full-content,
+        .main-container {
+            background: var(--overlay-panel-bg);
+            border-color: var(--overlay-border);
+            color: var(--overlay-text-color);
         }
     </style>
 </head>
@@ -539,6 +561,14 @@
                     console.log('[LLM-RESPONSE] show-loading received');
                     showLoadingState();
                 });
+
+                if (window.electronAPI.onOverlayOpacityChanged) {
+                    window.electronAPI.onOverlayOpacityChanged((event, data) => {
+                        const value = Number(data?.value);
+                        const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+                        document.documentElement.style.setProperty('--overlay-surface-opacity', String(opacity));
+                    });
+                }
                 
                 // Listen for LLM response
                 window.electronAPI.onDisplayLlmResponse(function() {

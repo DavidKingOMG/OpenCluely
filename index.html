@@ -15,30 +15,19 @@
         -webkit-app-region: no-drag;
       }
 
-  .command-tab {
+      .command-tab {
         height: 28px;
-        background: linear-gradient(
-          135deg,
-          rgba(0, 0, 0, 0.4) 0%,
-          rgba(20, 20, 20, 0.5) 100%
-        );
+        background: var(--overlay-shell-bg);
         backdrop-filter: blur(20px);
         border-radius: 8px;
-        display: flex;
         align-items: center;
-        justify-content: center;
-        gap: 16px;
         padding: 0 12px;
         color: rgba(255, 255, 255, 0.9);
         font-size: 11px;
         font-weight: 600;
-        -webkit-app-region: drag;
-        flex-wrap: nowrap;
+        -webkit-app-region: no-drag;
         overflow: visible;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-  width: 100%;
-  /* Allow horizontal collapse to approximately one icon's width */
-  min-width: 60px;
+        border: 1px solid var(--overlay-border);
       }
 
       .command-item {
@@ -49,20 +38,20 @@
         border-radius: 6px;
         color: rgba(255, 255, 255, 0.9);
         font-size: 12px;
-        cursor: pointer;
-        transition: all 0.2s ease;
+        cursor: default;
+        transition: none;
         -webkit-app-region: no-drag;
   /* Allow items to shrink so the bar can collapse to one icon width */
   flex-shrink: 1;
       }
 
       .command-item:hover {
-        background: rgba(255, 255, 255, 0.1);
+        background: transparent;
       }
 
       .command-item i {
         font-size: 14px;
-        transition: all 0.3s ease;
+        transition: none;
       }
 
       .command-item span {
@@ -181,9 +170,9 @@
       }
 
       #settingsIndicator:hover {
-        color: #ffa726;
-        background: rgba(255, 167, 38, 0.15);
-        text-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
+        color: #ffffff;
+        background: transparent;
+        text-shadow: none;
       }
 
       #settingsIndicator.active {
@@ -201,8 +190,8 @@
         outline: none;
         padding: 4px 8px;
         min-width: 65px;
-        cursor: pointer;
-        transition: all 0.2s ease;
+        cursor: default;
+        transition: none;
         -webkit-app-region: no-drag;
         -webkit-appearance: none;
         -moz-appearance: none;
@@ -215,9 +204,9 @@
       }
 
       .command-item select:hover {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.08) 100%);
-        border-color: rgba(255, 255, 255, 0.3);
-        color: rgba(255, 255, 255, 1);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+        border-color: rgba(255, 255, 255, 0.2);
+        color: rgba(255, 255, 255, 0.95);
       }
 
       .command-item select:focus {
@@ -236,6 +225,30 @@
       .command-item select option:checked {
         background: rgba(76, 175, 80, 0.8);
         color: white;
+      }
+
+      .nav-opacity-control {
+        gap: 6px;
+        padding: 4px 8px;
+      }
+
+      .nav-opacity-control i {
+        font-size: 12px;
+        opacity: 0.9;
+      }
+
+      #overlayOpacityNav {
+        width: 96px;
+        height: 4px;
+        accent-color: rgba(255, 255, 255, 0.75);
+        cursor: default;
+      }
+
+      #overlayOpacityNavValue {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.75);
+        min-width: 32px;
+        text-align: right;
       }
 
       @keyframes pulse {
@@ -258,13 +271,9 @@
         position: absolute;
         top: 36px; /* below command bar */
         right: 8px;
-        background: linear-gradient(
-          135deg,
-          rgba(20, 20, 20, 0.7) 0%,
-          rgba(10, 10, 10, 0.6) 100%
-        );
+        background: var(--overlay-panel-bg);
         backdrop-filter: blur(18px);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid var(--overlay-border);
         border-radius: 10px;
         color: rgba(255, 255, 255, 0.95);
         box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
@@ -320,8 +329,8 @@
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: var(--overlay-chip-bg);
+        border: 1px solid var(--overlay-border);
         border-radius: 6px;
         padding: 3px 8px;
         font-weight: 600;
@@ -352,37 +361,51 @@
     </style>
   </head>
   <body>
-    <div class="command-tab">
-      <div class="command-item">
-        <i class="fas fa-camera"></i>
-        <span>⌘⇧S</span>
+    <div id="commandTab" class="command-tab stealth-surface stealth-interactive stealth-no-select">
+      <div class="command-tab__left">
+        <div class="status-dot non-interactive" id="statusDot"></div>
+        <div class="command-separator"></div>
+        <div class="command-item">
+          <i class="fas fa-camera"></i>
+          <span>⌘⇧S</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="micButton">
+          <i class="fas fa-microphone"></i>
+        </div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="micButton">
-        <i class="fas fa-microphone"></i>
+      <div class="command-tab__center">
+        <div class="command-item skill-indicator" id="skillIndicator">
+          <i class="fas fa-brain"></i>
+          <span>DSA</span>
+        </div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="skillIndicator">
-        <i class="fas fa-brain"></i>
-        <span>DSA</span>
+      <div class="command-tab__right">
+        <div class="command-item language-selector-wrap" id="languageSelector">
+          <i class="fas fa-code"></i>
+          <select id="codingLanguage">
+            <option value="cpp">C++</option>
+            <option value="c">C</option>
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="javascript">JavaScript</option>
+          </select>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item nav-opacity-control" id="overlayOpacityControl" aria-label="Overlay opacity control">
+          <i class="fas fa-circle-half-stroke"></i>
+          <input id="overlayOpacityNav" type="range" min="35" max="100" step="1" value="82" />
+          <span id="overlayOpacityNavValue">82%</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item settings-indicator" id="settingsIndicator" aria-label="Open settings">
+          <i class="fas fa-gear"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="infoButton" aria-label="Show shortcuts">
+          <i class="fas fa-circle-info"></i>
+        </div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="languageSelector">
-        <i class="fas fa-code"></i>
-        <select id="codingLanguage">
-          <option value="cpp">C++</option>
-          <option value="c">C</option>
-          <option value="python">Python</option>
-          <option value="java">Java</option>
-          <option value="javascript">JavaScript</option>
-        </select>
-      </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="infoButton" title="Shortcuts">
-        <i class="fas fa-circle-info"></i>
-      </div>
-      <div class="command-separator"></div>
-      <div class="status-dot non-interactive" id="statusDot"></div>
     </div>
 
   <!-- Shortcuts Popover (hidden by default via CSS) -->

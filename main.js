@@ -21,6 +21,7 @@ class ApplicationController {
     this.activeSkill = "general";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
+    this.overlaySurfaceOpacity = 0.82;
     this.speechAvailable = false;
     this.speechProvider = 'azure';
     this.whisperModel = process.env.WHISPER_MODEL || 'ggml-base.en.bin';
@@ -101,6 +102,7 @@ class ApplicationController {
 
       await windowManager.initializeWindows();
       this.setupGlobalShortcuts();
+      this.broadcastOverlayOpacity();
 
 
       // Initialize default stealth mode with terminal icon
@@ -1318,6 +1320,14 @@ class ApplicationController {
     windowManager.broadcastToAllWindows("transcription-llm-response", broadcastData);
   }
 
+  broadcastOverlayOpacity() {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.webContents.send("overlay-opacity-changed", {
+        value: this.overlaySurfaceOpacity,
+      });
+    });
+  }
+
   onWindowAllClosed() {
     if (process.platform !== "darwin") {
       app.quit();
@@ -1376,7 +1386,8 @@ class ApplicationController {
       whisperAudioSource: process.env.WHISPER_AUDIO_SOURCE || this.whisperAudioSource || 'microphone',
       whisperCaptureDevice: process.env.WHISPER_CAPTURE_DEVICE || this.whisperCaptureDevice || 'auto',
       whisperInstalled: !!speechService.getStatus?.().whisperReady,
-      speechAvailable: this.speechAvailable
+      speechAvailable: this.speechAvailable,
+      overlaySurfaceOpacity: this.overlaySurfaceOpacity
     };
   }
   
@@ -1484,6 +1495,16 @@ class ApplicationController {
         this.applySpeechProvider(this.speechProvider);
       }
 
+      if (settings.overlaySurfaceOpacity != null) {
+        const parsedOpacity = Number(settings.overlaySurfaceOpacity);
+        const nextOpacity = Number.isFinite(parsedOpacity)
+          ? Math.max(0.35, Math.min(1, parsedOpacity))
+          : 0.82;
+        this.overlaySurfaceOpacity = nextOpacity;
+        settings.overlaySurfaceOpacity = nextOpacity;
+        this.broadcastOverlayOpacity();
+      }
+
       // Handle icon change specifically
       if (settings.selectedIcon) {
         this.appIcon = settings.selectedIcon;
@@ -1518,7 +1539,6 @@ class ApplicationController {
       if (fs.existsSync(filePath)) {
         const raw = fs.readFileSync(filePath, 'utf8');
         const saved = JSON.parse(raw);
-
         this.codingLanguage = saved.codingLanguage || this.codingLanguage;
         this.activeSkill = saved.activeSkill || this.activeSkill;
         this.appIcon = saved.selectedIcon || saved.appIcon || this.appIcon;
@@ -1534,6 +1554,10 @@ class ApplicationController {
         this.whisperIntervalMs = Number(saved.whisperIntervalMs || this.whisperIntervalMs || process.env.WHISPER_INTERVAL_MS || 2000);
         this.whisperAudioSource = saved.whisperAudioSource || this.whisperAudioSource || process.env.WHISPER_AUDIO_SOURCE || 'microphone';
         this.whisperCaptureDevice = saved.whisperCaptureDevice || this.whisperCaptureDevice || process.env.WHISPER_CAPTURE_DEVICE || 'auto';
+        const parsedOverlayOpacity = Number(saved.overlaySurfaceOpacity);
+        this.overlaySurfaceOpacity = Number.isFinite(parsedOverlayOpacity)
+          ? Math.max(0.35, Math.min(1, parsedOverlayOpacity))
+          : 0.82;
         process.env.WHISPER_MODEL = this.whisperModel;
         process.env.WHISPER_INTERVAL_MS = String(this.whisperIntervalMs);
         process.env.WHISPER_AUDIO_SOURCE = this.whisperAudioSource;

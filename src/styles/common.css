@@ -3,6 +3,153 @@
 /* Font imports */
 @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
 
+:root {
+    --overlay-surface-opacity: 0.82;
+    --overlay-shell-bg: rgba(10, 14, 18, var(--overlay-surface-opacity));
+    --overlay-panel-bg: rgba(18, 24, 30, var(--overlay-surface-opacity));
+    --overlay-chip-bg: rgba(30, 38, 46, calc(var(--overlay-surface-opacity) * 0.92));
+    --overlay-border: rgba(255, 255, 255, 0.08);
+    --overlay-text-color: rgba(255, 255, 255, 0.96);
+}
+
+.stealth-interactive,
+.stealth-interactive * {
+    cursor: default !important;
+}
+
+.stealth-no-select,
+.stealth-no-select * {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.stealth-surface {
+    background: var(--overlay-panel-bg);
+    border: 1px solid var(--overlay-border);
+    color: var(--overlay-text-color);
+}
+
+.settings-row {
+    gap: 12px;
+}
+
+.settings-row > .settings-item-label {
+    min-width: 110px;
+}
+
+.opacity-scrub {
+    --scrub-fill: 0.82;
+    position: relative;
+    width: 180px;
+    height: 16px;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.opacity-scrub::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.42));
+    transform-origin: left center;
+    transform: scaleX(var(--scrub-fill));
+}
+
+body .command-tab {
+    display: grid;
+    grid-template-columns: auto minmax(120px, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    max-width: 900px;
+    width: max-content;
+    min-width: 420px;
+}
+
+.command-tab__left,
+.command-tab__right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.command-tab__center {
+    min-width: 0;
+    display: flex;
+    justify-content: center;
+}
+
+.skill-indicator {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.skill-indicator span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.language-selector-wrap {
+    min-width: 0;
+}
+
+.language-selector-wrap select {
+    max-width: 120px;
+}
+
+.bypass-row {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 10px;
+}
+
+.bypass-button {
+    background: var(--overlay-chip-bg);
+    border: 1px solid var(--overlay-border);
+    color: var(--overlay-text-color);
+    cursor: default !important;
+    transition: none;
+}
+
+.bypass-button:hover,
+.bypass-button:focus {
+    background: var(--overlay-chip-bg);
+    outline: none;
+    box-shadow: none;
+}
+
+.command-tab,
+.message,
+.response-content,
+.settings-menu,
+.bypass-row {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.chat-container,
+.chat-header,
+.chat-input,
+.input-container {
+    background: var(--overlay-panel-bg) !important;
+    border-color: var(--overlay-border) !important;
+    color: var(--overlay-text-color) !important;
+}
+
+input,
+textarea,
+select {
+    color: var(--overlay-text-color);
+}
+
+input:not([type="text"]),
+textarea,
+select {
+    cursor: default !important;
+}
+
 /* Base styles */
 body {
     background: transparent !important;
@@ -134,15 +281,15 @@ body {
     border-radius: 6px;
     padding: 6px 10px;
     color: rgba(255, 255, 255, 0.9);
-    cursor: pointer;
-    transition: all 0.2s ease;
+    cursor: default;
+    transition: none;
     font-size: 12px;
     font-weight: 500;
 }
 
 .btn:hover {
-    background: rgba(255, 255, 255, 0.25);
-    color: rgba(255, 255, 255, 1);
+    background: rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .btn.btn-primary {
@@ -195,17 +342,17 @@ body {
     padding: 12px 16px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     backdrop-filter: blur(5px);
-    transition: all 0.3s ease;
-    cursor: pointer;
+    transition: none;
+    cursor: default;
     position: relative;
     overflow: hidden;
 }
 
 .card:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.25);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: none;
+    box-shadow: none;
 }
 
 .card.active {
@@ -539,11 +686,6 @@ body {
 .focus-visible:focus {
     outline: 2px solid rgba(76, 175, 80, 0.8);
     outline-offset: 2px;
-}
-
-/* Smooth transitions */
-* {
-    transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 /* Scrollbar styles */
