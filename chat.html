@@ -676,6 +676,12 @@
           <div class="recording-indicator" id="recordingIndicator"></div>
         </div>
         <div class="header-actions">
+          <button class="icon-button" id="newSessionBtn" title="Start a new session">
+            <i class="fas fa-rotate-right"></i>
+          </button>
+          <button class="icon-button" id="cancelPromptBtn" title="Cancel active prompt (Ctrl/Cmd+Shift+X)">
+            <i class="fas fa-ban"></i>
+          </button>
           <button class="icon-button" id="clearHistoryBtn" title="Clear chat history">
             <i class="fas fa-trash"></i>
           </button>
@@ -726,6 +732,8 @@
       const listeningDuration = document.getElementById('listeningDuration');
       const interimOverlay = document.getElementById('interimOverlay');
       const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+      const cancelPromptBtn = document.getElementById('cancelPromptBtn');
+      const newSessionBtn = document.getElementById('newSessionBtn');
 
       let isRecording = false;
       let isInteractive = true;
@@ -736,6 +744,7 @@
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
       let chatHistory = [];
+      const cancelledRequestIds = new Set();
       const recentResponseHashes = new Set();
       const RECENT_HASH_LIMIT = 50;
 
@@ -821,9 +830,32 @@
       // Also capture generic LLM responses (from OCR/screenshot flows)
       if (whysperAPI && whysperAPI.onLlmResponse) {
         whysperAPI.onLlmResponse((event, data) => {
+          if (data?.cancelled) return;
+          if (data?.requestId && cancelledRequestIds.has(data.requestId)) {
+            cancelledRequestIds.delete(data.requestId);
+            return;
+          }
           try { hideThinkingIndicator(); } catch (_) {}
           if (data && data.response) {
             renderAssistantResponse(data.response);
+          }
+        });
+      }
+
+      if (whysperAPI && whysperAPI.onLlmRequestCancelled) {
+        whysperAPI.onLlmRequestCancelled((event, data) => {
+          if (data?.requestId) {
+            cancelledRequestIds.add(data.requestId);
+            while (cancelledRequestIds.size > 200) {
+              const oldest = cancelledRequestIds.values().next().value;
+              cancelledRequestIds.delete(oldest);
+            }
+          }
+
+          const hasThinkingIndicator = !!document.getElementById('thinking-indicator');
+          hideThinkingIndicator();
+          if (hasThinkingIndicator) {
+            addMessage('Prompt cancelled', 'system');
           }
         });
       }
@@ -1194,6 +1226,10 @@
 
         // Replace transcription LLM handler to store text + snippets
         whysperAPI.onTranscriptionLlmResponse((event, data) => {
+          if (data?.requestId && cancelledRequestIds.has(data.requestId)) {
+            cancelledRequestIds.delete(data.requestId);
+            return;
+          }
           if (data && data.response) {
             try { hideThinkingIndicator(); } catch (_) {}
             renderAssistantResponse(data.response);
@@ -1204,6 +1240,30 @@
       // UI Event Listeners
       if (clearHistoryBtn) {
         clearHistoryBtn.addEventListener('click', () => clearChatHistory());
+      }
+
+      if (newSessionBtn) {
+        newSessionBtn.addEventListener('click', async () => {
+          try {
+            if (whysperAPI && whysperAPI.clearSessionMemory) {
+              await whysperAPI.clearSessionMemory();
+            }
+          } catch (error) {
+            console.error('Failed to start new session:', error);
+          }
+        });
+      }
+
+      if (cancelPromptBtn) {
+        cancelPromptBtn.addEventListener('click', async () => {
+          try {
+            if (whysperAPI && whysperAPI.cancelActivePrompt) {
+              await whysperAPI.cancelActivePrompt();
+            }
+          } catch (error) {
+            console.error('Failed to cancel active prompt:', error);
+          }
+        });
       }
 
       if (micButton) {
@@ -1299,6 +1359,14 @@
           e.preventDefault();
           if (!isInteractive || !speechAvailable) return;
           micButton && micButton.click();
+          return;
+        }
+
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'x') {
+          e.preventDefault();
+          if (whysperAPI && whysperAPI.cancelActivePrompt) {
+            whysperAPI.cancelActivePrompt();
+          }
         }
       });
 
