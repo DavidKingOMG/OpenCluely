@@ -16,6 +16,10 @@ class MainWindowUI {
         this.statusDot = null;
         this.skillIndicator = null;
         this.micButton = null;
+        this.overlayOpacityControl = null;
+        this.overlayOpacityNav = null;
+        this.overlayOpacityNavValue = null;
+        this.overlayOpacitySaveTimer = null;
         this.isRecording = false;
         this.speechAvailable = false; // track availability
         this.speechProvider = 'azure';
@@ -268,7 +272,7 @@ class MainWindowUI {
             const commandTab = document.querySelector('.command-tab');
             if (commandTab && window.electronAPI && window.electronAPI.resizeWindow) {
                 const rect = commandTab.getBoundingClientRect();
-                const width = Math.ceil(rect.width);
+                const width = Math.max(420, Math.min(900, Math.ceil(rect.width)));
                 let height = Math.ceil(rect.height);
 
                 // If shortcuts popover is visible, extend height to fit it
@@ -294,6 +298,9 @@ class MainWindowUI {
         this.skillIndicator = document.getElementById('skillIndicator');
         this.settingsIndicator = document.getElementById('settingsIndicator'); // Optional
         this.micButton = document.getElementById('micButton');
+        this.overlayOpacityControl = document.getElementById('overlayOpacityControl');
+        this.overlayOpacityNav = document.getElementById('overlayOpacityNav');
+        this.overlayOpacityNavValue = document.getElementById('overlayOpacityNavValue');
     this.infoButton = document.getElementById('infoButton');
     this.shortcutsPopover = document.getElementById('shortcutsPopover');
 
@@ -322,7 +329,7 @@ class MainWindowUI {
         if (this.settingsIndicator) {
             this.settingsIndicator.addEventListener('click', () => {
                 if (this.isInteractive) {
-                    this.showSettingsMenu();
+                    this.openSettings();
                 }
             });
         }
@@ -370,10 +377,57 @@ class MainWindowUI {
                     const commandTab = document.querySelector('.command-tab');
                     if (commandTab && window.electronAPI && window.electronAPI.resizeWindow) {
                         const rect = commandTab.getBoundingClientRect();
-                        window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
+                        const width = Math.max(420, Math.min(900, Math.ceil(rect.width)));
+                        const height = Math.ceil(rect.height);
+                        window.electronAPI.resizeWindow(width, height);
                     }
                 }, 50);
             });
+        }
+
+        if (this.overlayOpacityNav && this.overlayOpacityNavValue) {
+            if (window.electronAPI?.getSettings) {
+                window.electronAPI.getSettings().then((settings) => {
+                    const value = Number(settings?.overlaySurfaceOpacity);
+                    const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+                    this.setOverlayOpacityUI(opacity);
+                }).catch(() => {
+                    this.setOverlayOpacityUI(0.82);
+                });
+            }
+
+            this.overlayOpacityNav.addEventListener('input', () => {
+                const opacity = Math.max(0.35, Math.min(1, Number(this.overlayOpacityNav.value) / 100));
+                this.setOverlayOpacityUI(opacity);
+
+                if (this.overlayOpacitySaveTimer) {
+                    clearTimeout(this.overlayOpacitySaveTimer);
+                }
+
+                this.overlayOpacitySaveTimer = setTimeout(() => {
+                    if (window.electronAPI?.saveSettings) {
+                        window.electronAPI.saveSettings({ overlaySurfaceOpacity: Number(opacity.toFixed(2)) });
+                    }
+                    this.overlayOpacitySaveTimer = null;
+                }, 80);
+            });
+
+            if (this.overlayOpacityControl) {
+                this.overlayOpacityControl.addEventListener('mousemove', (event) => {
+                    if (event.buttons !== 0) return;
+                    const rect = this.overlayOpacityNav.getBoundingClientRect();
+                    if (!rect.width) return;
+
+                    const ratio = (event.clientX - rect.left) / rect.width;
+                    const clampedRatio = Math.max(0, Math.min(1, ratio));
+                    const nextValue = Math.round(35 + clampedRatio * 65);
+
+                    if (Number(this.overlayOpacityNav.value) !== nextValue) {
+                        this.overlayOpacityNav.value = String(nextValue);
+                        this.overlayOpacityNav.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
+            }
         }
 
         // Info button / shortcuts popover
@@ -383,24 +437,6 @@ class MainWindowUI {
                 e.stopPropagation();
                 this.toggleShortcutsPopover();
             });
-
-            // Hover to show
-            this.infoButton.addEventListener('mouseenter', () => {
-                if (!this.isInteractive) return;
-                this.showShortcutsPopover();
-            });
-            // Queue hide when leaving the button
-            this.infoButton.addEventListener('mouseleave', () => this.queueHideShortcutsPopover());
-
-            // Keep open when hovering popover
-            this.shortcutsPopover.addEventListener('mouseenter', () => {
-                if (this._popoverHideTimeout) {
-                    clearTimeout(this._popoverHideTimeout);
-                    this._popoverHideTimeout = null;
-                }
-            });
-            // Hide after a small delay when leaving popover
-            this.shortcutsPopover.addEventListener('mouseleave', () => this.queueHideShortcutsPopover());
 
             // Close on outside click
             document.addEventListener('click', (e) => {
@@ -464,6 +500,15 @@ class MainWindowUI {
                     });
                 }
             });
+
+            if (window.electronAPI.onOverlayOpacityChanged) {
+                window.electronAPI.onOverlayOpacityChanged((event, data) => {
+                    const value = Number(data?.value);
+                    const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+                    document.documentElement.style.setProperty('--overlay-surface-opacity', String(opacity));
+                    this.setOverlayOpacityUI(opacity);
+                });
+            }
 
             window.electronAPI.receive('open-llm-config', async (event, payload) => {
                 try {
@@ -701,10 +746,8 @@ class MainWindowUI {
             const oldText = skillSpan.textContent;
             skillSpan.textContent = skillName;
                         
-            const tooltip = this.isInteractive ? 
-                `${skillName} - Use ⌘↑/↓ to navigate skills` : 
-                `${skillName} - Enable interactive mode (Alt+A) to navigate`;
-            this.skillIndicator.title = tooltip;
+            this.skillIndicator.removeAttribute('title');
+            this.skillIndicator.setAttribute('aria-label', `${skillName} skill`);
             
             // Add visual feedback for skill change
             this.animateSkillChange();
@@ -721,14 +764,14 @@ class MainWindowUI {
     }
 
     animateSkillChange() {
-        if (this.skillIndicator) {
-            this.skillIndicator.style.transform = 'scale(1.1)';
-            this.skillIndicator.style.transition = 'transform 0.2s ease';
-            
-            setTimeout(() => {
-                this.skillIndicator.style.transform = 'scale(1)';
-            }, 200);
-        }
+        return;
+    }
+
+    setOverlayOpacityUI(opacity) {
+        if (!this.overlayOpacityNav || !this.overlayOpacityNavValue) return;
+        const clamped = Math.max(0.35, Math.min(1, Number(opacity) || 0.82));
+        this.overlayOpacityNav.value = String(Math.round(clamped * 100));
+        this.overlayOpacityNavValue.textContent = `${Math.round(clamped * 100)}%`;
     }
 
     navigateSkill(direction) {
@@ -1162,16 +1205,6 @@ class MainWindowUI {
                 return;
             }
             
-            // Add visual feedback
-            if (this.settingsIndicator) {
-                this.settingsIndicator.style.transform = 'scale(1.1)';
-                this.settingsIndicator.style.transition = 'transform 0.2s ease';
-                
-                setTimeout(() => {
-                    this.settingsIndicator.style.transform = 'scale(1)';
-                }, 200);
-            }
-            
             logger.info('Settings window opened', { component: 'MainWindowUI' });
         } catch (error) {
             logger.error('Failed to open settings', {
@@ -1231,11 +1264,11 @@ class MainWindowUI {
             padding: 8px 16px;
             color: rgba(255, 255, 255, 0.9);
             font-size: 13px;
-            cursor: pointer;
+            cursor: default;
             display: flex;
             align-items: center;
             gap: 8px;
-            transition: all 0.2s ease;
+            transition: none;
         `;
         item.innerHTML = `<i class="fas ${iconClass}"></i>${text}`;
         item.addEventListener('mouseover', () => {

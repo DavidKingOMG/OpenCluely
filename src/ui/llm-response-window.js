@@ -21,6 +21,7 @@ class LLMResponseWindowUI {
       this.setupElements();
       this.setupEventListeners();
       this.configureMarked();
+      this.applyOverlayOpacityToSurfaces(0.82);
 
       logger.info("LLM response window UI initialized", {
         component: "LLMResponseWindowUI",
@@ -106,6 +107,13 @@ class LLMResponseWindowUI {
       });
       this.hideLoadingState();
       this.displayErrorMessage("Prompt cancelled");
+    });
+
+    ipcRenderer.on("overlay-opacity-changed", (event, data) => {
+      const value = Number(data?.value);
+      const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+      document.documentElement.style.setProperty("--overlay-surface-opacity", String(opacity));
+      this.applyOverlayOpacityToSurfaces(opacity);
     });
 
     // Interaction state handlers
@@ -869,7 +877,34 @@ class LLMResponseWindowUI {
 
   handleMouseEnter(e) {
     e.target.focus({ preventScroll: true });
-    e.target.style.cursor = "grab";
+    e.target.style.cursor = "default";
+  }
+
+  applyOverlayOpacityToSurfaces(opacity = 0.82) {
+    const panelOpacity = Math.max(0.35, Math.min(1, Number(opacity) || 0.82));
+    const shellOpacity = Math.max(0.35, Math.min(1, panelOpacity));
+    const shellColor = `rgba(10, 14, 18, ${shellOpacity})`;
+    const panelColor = `rgba(18, 24, 30, ${panelOpacity})`;
+    const borderColor = "rgba(255, 255, 255, 0.08)";
+
+    document.body.style.background = shellColor;
+
+    const contentArea = this.elements.responseContent;
+    if (contentArea) {
+      contentArea.style.background = panelColor;
+      contentArea.style.borderColor = borderColor;
+    }
+
+    [
+      this.elements.textContent,
+      this.elements.codeContent,
+      this.elements.fullContent,
+      document.querySelector('.full-content-inner')
+    ].forEach((element) => {
+      if (!element) return;
+      element.style.background = panelColor;
+      element.style.borderColor = borderColor;
+    });
   }
 
   handleMouseLeave(e) {

@@ -12,11 +12,18 @@ try {
         };
     }
 
+const BYPASS_PROMPTS = {
+    1: 'Bypass 1',
+    2: 'Bypass 2',
+    3: 'Bypass 3'
+};
+
 class ChatWindowUI {
     constructor() {
         this.isRecording = false;
         this.isInteractive = true; // Start in interactive mode
         this.cancelledRequestIds = new Set();
+        this.bypassInFlight = false;
         this.elements = {};
         
         this.init();
@@ -46,7 +53,8 @@ class ChatWindowUI {
             interactionIndicator: document.getElementById('interactionIndicator'),
             interactionText: document.getElementById('interactionText'),
             listeningContainer: document.getElementById('listeningContainer'),
-            listeningDuration: document.getElementById('listeningDuration')
+            listeningDuration: document.getElementById('listeningDuration'),
+            bypassButtons: Array.from(document.querySelectorAll('.bypass-button'))
         };
         
         // Validate required elements
@@ -118,6 +126,14 @@ class ChatWindowUI {
                     this.handleSkillActivated(data.skill);
                 }
             });
+
+            if (window.electronAPI.onOverlayOpacityChanged) {
+                window.electronAPI.onOverlayOpacityChanged((event, data) => {
+                    const value = Number(data?.value);
+                    const opacity = Number.isFinite(value) ? Math.max(0.35, Math.min(1, value)) : 0.82;
+                    document.documentElement.style.setProperty('--overlay-surface-opacity', String(opacity));
+                });
+            }
             
             // Session handlers
             window.electronAPI.onSessionCleared(() => {
@@ -224,6 +240,30 @@ class ChatWindowUI {
             if (e.key === 'Enter') {
                 this.sendMessage();
             }
+        });
+
+        this.elements.bypassButtons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                if (!this.isInteractive || this.bypassInFlight) {
+                    return;
+                }
+
+                const key = Number(button.dataset.bypass);
+                const text = BYPASS_PROMPTS[key];
+                if (!text) return;
+
+                this.bypassInFlight = true;
+                try {
+                    this.showThinkingIndicator();
+                    await this.sendMessage(text, button.textContent.trim());
+                } finally {
+                    this.bypassInFlight = false;
+                }
+            });
+
+            button.addEventListener('mouseenter', () => {
+                button.style.cursor = 'default';
+            });
         });
         
         // Global keyboard shortcuts
@@ -347,11 +387,16 @@ class ChatWindowUI {
         logger.info('Skill activated in chat', { skill: skillName });
     }
 
-    async sendMessage() {
-        const text = this.elements.messageInput.value.trim();
+    async sendMessage(textOverride = null, displayTextOverride = null) {
+        const text = textOverride != null
+            ? String(textOverride).trim()
+            : this.elements.messageInput.value.trim();
         if (text) {
-            this.addMessage(text, 'user');
-            this.elements.messageInput.value = '';
+            const displayText = displayTextOverride || text;
+            this.addMessage(displayText, 'user');
+            if (textOverride == null) {
+                this.elements.messageInput.value = '';
+            }
             
             // Send to main process for session memory storage
             try {

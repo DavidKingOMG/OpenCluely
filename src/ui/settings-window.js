@@ -279,6 +279,18 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
         }
     };
 
+    const applyOverlayOpacityUI = (rawValue) => {
+        const parsedValue = Number(rawValue);
+        const nextValue = Number.isFinite(parsedValue)
+            ? Math.max(0.35, Math.min(1, parsedValue))
+            : 0.82;
+        const roundedValue = Number(nextValue.toFixed(2));
+
+        document.documentElement.style.setProperty('--overlay-surface-opacity', String(roundedValue));
+
+        return roundedValue;
+    };
+
     // Function to load settings into UI
     const loadSettingsIntoUI = async (settings) => {
 
@@ -335,6 +347,8 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
             }
         });
     }
+
+    applyOverlayOpacityUI(settings.overlaySurfaceOpacity);
 };
 
     // Load settings when window opens
@@ -355,6 +369,12 @@ async function populateActiveSkillDropdown(activeSkillSelect, selectedSkill) {
                 console.log('Language updated from overlay window:', data.language);
             }
     });
+
+    if (window.electronAPI?.onOverlayOpacityChanged) {
+        window.electronAPI.onOverlayOpacityChanged((event, data) => {
+            applyOverlayOpacityUI(data?.value);
+        });
+    }
     }
 
     let saveSettingsTimer = null;

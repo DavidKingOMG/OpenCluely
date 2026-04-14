@@ -131,8 +131,8 @@
             padding: 6px 12px;
             color: rgba(255, 255, 255, 0.9);
             font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s ease;
+            cursor: default;
+            transition: none;
             display: flex;
             align-items: center;
             gap: 6px;
@@ -213,8 +213,8 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
+            cursor: default;
+            transition: none;
         }
 
         .icon-option:hover {
@@ -240,7 +240,7 @@
         }
 
         select.input-field {
-            cursor: pointer;
+            cursor: default;
             padding-right: 30px;
             appearance: none;
             background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(255, 255, 255, 0.5)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
@@ -253,6 +253,27 @@
             background: #1a1a1a;
             color: #ffffff;
             padding: 8px;
+        }
+
+        /* Overlay opacity bindings */
+        .settings-container {
+            background: var(--overlay-shell-bg) !important;
+            border-color: var(--overlay-border) !important;
+        }
+
+        .settings-header,
+        .settings-section-content,
+        .settings-item,
+        .btn,
+        .input-field,
+        .icon-option {
+            background: var(--overlay-panel-bg) !important;
+            border-color: var(--overlay-border) !important;
+            color: var(--overlay-text-color) !important;
+        }
+
+        .settings-item-description {
+            color: rgba(255, 255, 255, 0.75) !important;
         }
     </style>
 </head>
@@ -357,7 +378,7 @@
                             <div class="settings-item-label">STT Diagnostics</div>
                             <div class="settings-item-description">Open a dedicated diagnostics window for Whisper setup and recorder checks</div>
                         </div>
-                        <button class="input-field" id="openSTTDiagnosticsBtn" type="button" style="cursor:pointer;">Open STT Diagnostics</button>
+                        <button class="input-field" id="openSTTDiagnosticsBtn" type="button" style="cursor:default;">Open STT Diagnostics</button>
                     </div>
                     <div class="settings-item" id="whisperModelRow" style="display:none;">
                         <div>
@@ -459,8 +480,8 @@
                             <div class="settings-item-description">Authenticate via browser. Link can be copied or opened.</div>
                         </div>
                         <div style="display:flex; gap:8px; width:100%;">
-                            <button class="input-field" id="codexCopyLinkBtn" type="button" style="cursor:pointer;">Copy Link</button>
-                            <button class="input-field" id="codexOpenLinkBtn" type="button" style="cursor:pointer;">Open Link</button>
+                            <button class="input-field" id="codexCopyLinkBtn" type="button" style="cursor:default;">Copy Link</button>
+                            <button class="input-field" id="codexOpenLinkBtn" type="button" style="cursor:default;">Open Link</button>
                         </div>
                     </div>
                 </div>
