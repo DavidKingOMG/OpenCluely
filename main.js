@@ -163,7 +163,7 @@ class ApplicationController {
 
   setupGlobalShortcuts() {
     const shortcuts = {
-      "CommandOrControl+Shift+S": () => this.triggerScreenshotOCR(),
+      "CommandOrControl+Shift+S": () => this.startSnipCapture(),
       "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
@@ -262,7 +262,8 @@ class ApplicationController {
         return ["general", "dsa", "programming"];
       }
   });
-  ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
+  ipcMain.handle("take-screenshot", () => this.startSnipCapture());
+  ipcMain.handle("take-full-screenshot", () => this.triggerScreenshotOCR());
   ipcMain.handle("start-snip-capture", () => this.startSnipCapture());
   ipcMain.handle("submit-snip-selection", (event, payload) => this.submitSnipSelection(payload));
   ipcMain.handle("cancel-snip-capture", () => this.cancelSnipCapture());
