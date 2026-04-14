@@ -99,6 +99,15 @@ class LLMResponseWindowUI {
       }, 50);
     });
 
+    ipcRenderer.on("llm-request-cancelled", (event, data) => {
+      logger.info("llm-request-cancelled event received", {
+        component: "LLMResponseWindowUI",
+        requestId: data?.requestId || null,
+      });
+      this.hideLoadingState();
+      this.displayErrorMessage("Prompt cancelled");
+    });
+
     // Interaction state handlers
     ipcRenderer.on("interaction-enabled", () => {
       logger.debug("interaction-enabled event received", {

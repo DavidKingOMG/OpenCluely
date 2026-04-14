@@ -16,6 +16,7 @@ class ChatWindowUI {
     constructor() {
         this.isRecording = false;
         this.isInteractive = true; // Start in interactive mode
+        this.cancelledRequestIds = new Set();
         this.elements = {};
         
         this.init();
@@ -134,18 +135,50 @@ class ChatWindowUI {
             });
             
             window.electronAPI.onLlmResponse((event, data) => {
+                if (data?.cancelled) {
+                    return;
+                }
+
+                if (data?.requestId && this.cancelledRequestIds.has(data.requestId)) {
+                    this.cancelledRequestIds.delete(data.requestId);
+                    return;
+                }
+
                 // Store AI response (text + snippets) in chat history
                 if (data && data.response) {
                     this.hideThinkingIndicator?.();
                     this.renderAssistantResponse(data.response);
                 }
             });
+
+            if (window.electronAPI.onLlmRequestCancelled) {
+                window.electronAPI.onLlmRequestCancelled((event, data) => {
+                    if (data?.requestId) {
+                        this.cancelledRequestIds.add(data.requestId);
+                        while (this.cancelledRequestIds.size > 200) {
+                            const oldest = this.cancelledRequestIds.values().next().value;
+                            this.cancelledRequestIds.delete(oldest);
+                        }
+                    }
+
+                    const hasThinkingIndicator = !!document.getElementById('thinking-indicator');
+                    this.hideThinkingIndicator?.();
+                    if (hasThinkingIndicator) {
+                        this.addMessage('Prompt cancelled', 'system');
+                    }
+                });
+            }
             
             window.electronAPI.onLlmError((event, data) => {
                 this.addMessage(`LLM Error: ${data.error}`, 'error');
             });
             
             window.electronAPI.onTranscriptionLlmResponse((event, data) => {
+                if (data?.requestId && this.cancelledRequestIds.has(data.requestId)) {
+                    this.cancelledRequestIds.delete(data.requestId);
+                    return;
+                }
+
                 if (data && data.response) {
                     // Hide thinking indicator
                     this.hideThinkingIndicator();
@@ -198,6 +231,14 @@ class ChatWindowUI {
             if (e.altKey && e.key === 'r') {
                 e.preventDefault();
                 this.elements.micButton.click();
+                return;
+            }
+
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'x') {
+                e.preventDefault();
+                if (window.electronAPI?.cancelActivePrompt) {
+                    window.electronAPI.cancelActivePrompt();
+                }
             }
         });
     }
