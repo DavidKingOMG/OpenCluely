@@ -168,7 +168,7 @@ class ApplicationController {
 
   setupGlobalShortcuts() {
     const shortcuts = {
-      "CommandOrControl+Shift+S": () => this.startSnipCapture(),
+      "CommandOrControl+Shift+S": () => this.triggerScreenshotOCR(),
       "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
@@ -1147,9 +1147,13 @@ class ApplicationController {
     const startTime = Date.now();
 
     try {
-      windowManager.showLLMLoading();
+      const capture = await captureService.captureAndProcess();
 
-  const capture = await captureService.captureAndProcess();
+      const previewDataUrl = this.buildCapturePreviewDataUrl(capture);
+      windowManager.showLLMLoading({
+        source: 'full-screenshot',
+        previewDataUrl,
+      });
 
       if (!capture.imageBuffer || !capture.imageBuffer.length) {
         windowManager.hideLLMResponse();
@@ -1232,7 +1236,18 @@ class ApplicationController {
         area: payload.area
       });
 
-      await this.processCapturedImageWithLLM(result);
+      const previewDataUrl = this.buildCapturePreviewDataUrl(result);
+      windowManager.showLLMLoading({
+        source: 'snip',
+        previewDataUrl,
+      });
+
+      const llmOutcome = await this.processCapturedImageWithLLM(result);
+      if (llmOutcome?.cancelled) {
+        windowManager.hideLLMResponse();
+        return { success: false, cancelled: true };
+      }
+
       return { success: true };
     } catch (error) {
       logger.error("Snip capture process failed", {
@@ -1384,6 +1399,16 @@ class ApplicationController {
     } finally {
       this.clearTrackedLlmRequest(tracked.id);
     }
+  }
+
+  buildCapturePreviewDataUrl(captureResult = {}) {
+    const imageBuffer = captureResult.imageBuffer;
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+      return null;
+    }
+
+    const mimeType = captureResult.mimeType || 'image/png';
+    return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
   }
   async processWithLLM(text, sessionHistory) {
     try {

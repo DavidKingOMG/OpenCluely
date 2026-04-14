@@ -200,6 +200,29 @@
             height: 100vh;
             background-color: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(8px);
+            position: relative;
+        }
+
+        .loading-preview {
+            max-width: min(72vw, 720px);
+            max-height: min(64vh, 420px);
+            border-radius: 10px;
+            border: 1px solid var(--overlay-border);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            object-fit: contain;
+            background: rgba(0, 0, 0, 0.25);
+        }
+
+        .loading-status {
+            position: absolute;
+            left: 50%;
+            bottom: 22px;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--overlay-border);
+            border-radius: 999px;
+            padding: 8px 14px;
+            backdrop-filter: blur(8px);
         }
         
         .loading-compact {
@@ -458,12 +481,15 @@
 
         <!-- Loading State -->
         <div id="loading" class="loading">
-            <div class="loading-compact">
-                <span class="text-gray-300 text-sm font-medium mr-2">Analyzing</span>
-                <div class="dots-container">
-                    <div class="bouncing-dot"></div>
-                    <div class="bouncing-dot"></div>
-                    <div class="bouncing-dot"></div>
+            <img id="loading-preview-image" class="loading-preview hidden" alt="Captured screenshot preview" />
+            <div class="loading-status">
+                <div class="loading-compact">
+                    <span class="text-gray-300 text-sm font-medium mr-2">Analyzing...</span>
+                    <div class="dots-container">
+                        <div class="bouncing-dot"></div>
+                        <div class="bouncing-dot"></div>
+                        <div class="bouncing-dot"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -557,9 +583,9 @@
                 console.log('[LLM-RESPONSE] Setting up IPC listeners...');
                 
                 // Set up show-loading event listener
-                window.electronAPI.onShowLoading(() => {
+                window.electronAPI.onShowLoading((event, payload) => {
                     console.log('[LLM-RESPONSE] show-loading received');
-                    showLoadingState();
+                    showLoadingState(payload);
                 });
 
                 if (window.electronAPI.onOverlayOpacityChanged) {
@@ -612,13 +638,25 @@
             }
         } // end initLLMResponseWindow
 
-        function showLoadingState() {
+        function showLoadingState(payload = {}) {
             const loadingElement = document.getElementById('loading');
             const responseElement = document.getElementById('response-content');
+            const previewImage = document.getElementById('loading-preview-image');
             
             if (loadingElement) {
                 loadingElement.classList.remove('hidden');
                 loadingElement.style.display = ''; // Remove any forced display styles
+            }
+
+            if (previewImage) {
+                const previewDataUrl = typeof payload?.previewDataUrl === 'string' ? payload.previewDataUrl : '';
+                if (previewDataUrl) {
+                    previewImage.src = previewDataUrl;
+                    previewImage.classList.remove('hidden');
+                } else {
+                    previewImage.removeAttribute('src');
+                    previewImage.classList.add('hidden');
+                }
             }
             
             if (responseElement) {

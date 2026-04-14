@@ -37,6 +37,7 @@ class LLMResponseWindowUI {
   setupElements() {
     this.elements = {
       loading: document.getElementById("loading"),
+      loadingPreviewImage: document.getElementById("loading-preview-image"),
       responseContent: document.getElementById("response-content"),
       splitLayout: document.getElementById("split-layout"),
       fullContent: document.getElementById("full-content"),
@@ -76,11 +77,11 @@ class LLMResponseWindowUI {
     }
 
     // Core event handlers with enhanced logging
-    ipcRenderer.on("show-loading", () => {
+    ipcRenderer.on("show-loading", (event, payload) => {
       logger.debug("show-loading event received", {
         component: "LLMResponseWindowUI",
       });
-      this.showLoadingState();
+      this.showLoadingState(payload);
     });
 
     ipcRenderer.on("display-llm-response", (event, data) => {
@@ -532,9 +533,21 @@ class LLMResponseWindowUI {
     }
   }
 
-  showLoadingState() {
+  showLoadingState(payload = {}) {
     if (this.elements.loading) {
       this.elements.loading.classList.remove("hidden");
+    }
+
+    const previewImage = this.elements.loadingPreviewImage;
+    if (previewImage) {
+      const previewDataUrl = typeof payload?.previewDataUrl === "string" ? payload.previewDataUrl : "";
+      if (previewDataUrl) {
+        previewImage.src = previewDataUrl;
+        previewImage.classList.remove("hidden");
+      } else {
+        previewImage.removeAttribute("src");
+        previewImage.classList.add("hidden");
+      }
     }
 
     if (this.elements.responseContent) {

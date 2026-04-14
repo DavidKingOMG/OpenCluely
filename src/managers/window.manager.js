@@ -1266,7 +1266,7 @@ class WindowManager {
     });
   }
 
-  showLLMLoading() {
+  showLLMLoading(payload = {}) {
     if (this.isScreenBeingShared) {
       logger.warn('LLM loading blocked due to screen sharing mode');
       return;
@@ -1275,7 +1275,7 @@ class WindowManager {
     const llmWindow = this.windows.get('llmResponse');
     if (llmWindow) {
       logger.debug('Showing LLM loading state');
-      llmWindow.webContents.send('show-loading');
+      llmWindow.webContents.send('show-loading', payload);
       this.showOnCurrentDesktop(llmWindow);
       
       // Position bound windows when LLM loading is shown
