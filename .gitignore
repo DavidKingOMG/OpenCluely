@@ -1,6 +1,9 @@
 node_modules/
 .env
+.venv-whisper/
+.whisper-models/
 eng.traineddata
 dist/
 .DS_Store
 .worktrees/
+*.log

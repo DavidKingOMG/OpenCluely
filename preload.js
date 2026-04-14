@@ -63,10 +63,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quit: () => {
     try {
       ipcRenderer.send('quit-app');
-      // Also try the app quit method
-      setTimeout(() => {
-        require('electron').app.quit();
-      }, 100);
     } catch (error) {
       console.error('Error in quit:', error);
     }
