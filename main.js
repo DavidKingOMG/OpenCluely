@@ -33,6 +33,9 @@ class ApplicationController {
     this.codexCallbackPort = null;
     this._oauthRetriedWithEphemeral = false;
     this.llmLastModels = {};
+    this.activeLlmRequest = null;
+    this.activeLlmRequestSeq = 0;
+    this.pendingTranscriptionLlmTimer = null;
 
 
     // Window configurations for reference
@@ -165,6 +168,7 @@ class ApplicationController {
       "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
+      "CommandOrControl+Shift+X": () => this.cancelActivePrompt(),
       "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
@@ -211,7 +215,12 @@ class ApplicationController {
       });
       
       // Automatically process transcription with LLM for intelligent response
-      setTimeout(async () => {
+      if (this.pendingTranscriptionLlmTimer) {
+        clearTimeout(this.pendingTranscriptionLlmTimer);
+      }
+
+      this.pendingTranscriptionLlmTimer = setTimeout(async () => {
+        this.pendingTranscriptionLlmTimer = null;
         try {
           const sessionHistory = sessionManager.getOptimizedHistory();
           await this.processTranscriptionWithLLM(text, sessionHistory);
@@ -391,22 +400,57 @@ class ApplicationController {
       // Add chat message to session memory
       sessionManager.addUserInput(text, 'chat');
       logger.debug('Chat message added to session memory', { textLength: text.length });
-      
-      // Process typed message with LLM in the same way as transcribed text
-      setTimeout(async () => {
-        try {
-          const sessionHistory = sessionManager.getOptimizedHistory();
-          await this.processTranscriptionWithLLM(text, sessionHistory);
-        } catch (error) {
-          logger.error("Failed to process chat message with LLM", {
-            error: error.message,
-            text: text.substring(0, 100)
-          });
+
+      const tracked = this.beginTrackedLlmRequest('chat');
+      try {
+        const sessionHistory = sessionManager.getOptimizedHistory();
+        const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
+        const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+
+        const llmResult = await llmService.processTextWithSkill(
+          text,
+          this.activeSkill,
+          sessionHistory.recent,
+          needsProgrammingLanguage ? this.codingLanguage : null,
+          { signal: tracked.abortController.signal }
+        );
+
+        if (!this.isTrackedRequestCurrent(tracked.id)) {
+          return { success: false, cancelled: true };
         }
-      }, 500);
-      
-      return { success: true };
+
+        sessionManager.addModelResponse(llmResult.response, {
+          skill: this.activeSkill,
+          processingTime: llmResult.metadata.processingTime,
+          usedFallback: llmResult.metadata.usedFallback,
+        });
+
+        BrowserWindow.getAllWindows().forEach((window) => {
+          window.webContents.send('llm-response', {
+            response: llmResult.response,
+            metadata: llmResult.metadata,
+            skill: this.activeSkill,
+            requestId: tracked.id
+          });
+        });
+
+        return { success: true };
+      } catch (error) {
+        if (/cancelled/i.test(error.message) || !this.isTrackedRequestCurrent(tracked.id)) {
+          return { success: false, cancelled: true };
+        }
+
+        logger.error("Failed to process chat message with LLM", {
+          error: error.message,
+          text: String(text || '').substring(0, 100)
+        });
+        throw error;
+      } finally {
+        this.clearTrackedLlmRequest(tracked.id);
+      }
     });
+
+    ipcMain.handle("cancel-active-prompt", () => this.cancelActivePrompt());
 
     ipcMain.handle("get-skill-prompt", (event, skillName) => {
       try {
@@ -1028,6 +1072,64 @@ class ApplicationController {
     windowManager.broadcastToAllWindows("skill-updated", { skill: newSkill });
   }
 
+  beginTrackedLlmRequest(source) {
+    if (this.activeLlmRequest?.abortController && !this.activeLlmRequest.abortController.signal.aborted) {
+      this.activeLlmRequest.abortController.abort();
+    }
+
+    const requestId = `llm-${++this.activeLlmRequestSeq}`;
+    const abortController = new AbortController();
+    this.activeLlmRequest = {
+      id: requestId,
+      source,
+      abortController,
+      startedAt: Date.now()
+    };
+    return this.activeLlmRequest;
+  }
+
+  clearTrackedLlmRequest(requestId) {
+    if (this.activeLlmRequest?.id === requestId) {
+      this.activeLlmRequest = null;
+    }
+  }
+
+  isTrackedRequestCurrent(requestId) {
+    return this.activeLlmRequest?.id === requestId;
+  }
+
+  async cancelActivePrompt() {
+    let cancelledPending = false;
+    let cancelledActive = false;
+    let requestId = null;
+
+    if (this.pendingTranscriptionLlmTimer) {
+      clearTimeout(this.pendingTranscriptionLlmTimer);
+      this.pendingTranscriptionLlmTimer = null;
+      cancelledPending = true;
+    }
+
+    if (this.activeLlmRequest) {
+      const { id, abortController } = this.activeLlmRequest;
+      if (abortController && !abortController.signal.aborted) {
+        abortController.abort();
+      }
+      this.activeLlmRequest = null;
+      cancelledActive = true;
+      requestId = id;
+    }
+
+    if (!cancelledPending && !cancelledActive) {
+      return { success: true, cancelled: false };
+    }
+
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.webContents.send("llm-request-cancelled", { requestId });
+    });
+
+    return { success: true, cancelled: true, requestId };
+  }
+
   async triggerScreenshotOCR() {
     if (!this.isReady) {
       logger.warn("Screenshot requested before application ready");
@@ -1056,35 +1158,10 @@ class ApplicationController {
         hasCredentials: llmStatus.hasApiKey
       });
 
-      const sessionHistory = sessionManager.getOptimizedHistory();
-
-      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
-      const llmResult = await llmService.processImageWithSkill(
-        capture.imageBuffer,
-        capture.mimeType || 'image/png',
-        this.activeSkill,
-        sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null
-      );
-
-      // Record model response in session
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-
-      this.broadcastLLMSuccess(llmResult);
+      const llmOutcome = await this.processCapturedImageWithLLM(capture);
+      if (llmOutcome?.cancelled) {
+        windowManager.hideLLMResponse();
+      }
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
         error: error.message,
@@ -1102,6 +1179,55 @@ class ApplicationController {
           error: error.message
         }
       });
+    }
+  }
+
+  async processCapturedImageWithLLM(captureResult) {
+    const tracked = this.beginTrackedLlmRequest('screenshot');
+    try {
+      const sessionHistory = sessionManager.getOptimizedHistory();
+
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
+      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+
+      const llmResult = await llmService.processImageWithSkill(
+        captureResult.imageBuffer,
+        captureResult.mimeType || 'image/png',
+        this.activeSkill,
+        sessionHistory.recent,
+        needsProgrammingLanguage ? this.codingLanguage : null,
+        { signal: tracked.abortController.signal }
+      );
+
+      if (!this.isTrackedRequestCurrent(tracked.id)) {
+        return { success: false, cancelled: true };
+      }
+
+      // Record model response in session
+      sessionManager.addModelResponse(llmResult.response, {
+        skill: this.activeSkill,
+        processingTime: llmResult.metadata.processingTime,
+        usedFallback: llmResult.metadata.usedFallback,
+        isImageAnalysis: true
+      });
+
+      windowManager.showLLMResponse(llmResult.response, {
+        skill: this.activeSkill,
+        processingTime: llmResult.metadata.processingTime,
+        usedFallback: llmResult.metadata.usedFallback,
+        isImageAnalysis: true,
+        requestId: tracked.id
+      });
+
+      this.broadcastLLMSuccess(llmResult, tracked.id);
+      return { success: true };
+    } catch (error) {
+      if (/cancelled/i.test(error.message) || !this.isTrackedRequestCurrent(tracked.id)) {
+        return { success: false, cancelled: true };
+      }
+      throw error;
+    } finally {
+      this.clearTrackedLlmRequest(tracked.id);
     }
   }
 
@@ -1165,24 +1291,25 @@ class ApplicationController {
   }
 
   async processTranscriptionWithLLM(text, sessionHistory) {
+    // Validate input text
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      logger.warn("Skipping LLM processing for empty or invalid transcription", {
+        textType: typeof text,
+        textLength: text ? text.length : 0
+      });
+      return;
+    }
+
+    const cleanText = text.trim();
+    if (cleanText.length < 2) {
+      logger.debug("Skipping LLM processing for very short transcription", {
+        text: cleanText
+      });
+      return;
+    }
+
+    const tracked = this.beginTrackedLlmRequest('transcription');
     try {
-      // Validate input text
-      if (!text || typeof text !== 'string' || text.trim().length === 0) {
-        logger.warn("Skipping LLM processing for empty or invalid transcription", {
-          textType: typeof text,
-          textLength: text ? text.length : 0
-        });
-        return;
-      }
-
-      const cleanText = text.trim();
-      if (cleanText.length < 2) {
-        logger.debug("Skipping LLM processing for very short transcription", {
-          text: cleanText
-        });
-        return;
-      }
-
       logger.info("Processing transcription with intelligent LLM response", {
         skill: this.activeSkill,
         textLength: cleanText.length,
@@ -1197,8 +1324,13 @@ class ApplicationController {
         cleanText,
         this.activeSkill,
         sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null
+        needsProgrammingLanguage ? this.codingLanguage : null,
+        { signal: tracked.abortController.signal }
       );
+
+      if (!this.isTrackedRequestCurrent(tracked.id)) {
+        return { success: false, cancelled: true };
+      }
 
       // Add LLM response to session memory
       sessionManager.addModelResponse(llmResult.response, {
@@ -1209,7 +1341,7 @@ class ApplicationController {
       });
 
       // Send response to chat windows
-      this.broadcastTranscriptionLLMResponse(llmResult);
+      this.broadcastTranscriptionLLMResponse(llmResult, tracked.id);
 
       logger.info("Transcription LLM response completed", {
         responseLength: llmResult.response.length,
@@ -1217,8 +1349,11 @@ class ApplicationController {
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
         processingTime: llmResult.metadata.processingTime
       });
-
     } catch (error) {
+      if (/cancelled/i.test(error.message) || !this.isTrackedRequestCurrent(tracked.id)) {
+        return { success: false, cancelled: true };
+      }
+
       logger.error("Transcription LLM processing failed", {
         error: error.message,
         errorStack: error.stack,
@@ -1229,7 +1364,11 @@ class ApplicationController {
       // Try to provide a fallback response
       try {
         const fallbackResult = llmService.generateIntelligentFallbackResponse(text, this.activeSkill);
-        
+
+        if (!this.isTrackedRequestCurrent(tracked.id)) {
+          return { success: false, cancelled: true };
+        }
+
         sessionManager.addModelResponse(fallbackResult.response, {
           skill: this.activeSkill,
           processingTime: fallbackResult.metadata.processingTime,
@@ -1238,13 +1377,12 @@ class ApplicationController {
           fallbackReason: error.message
         });
 
-        this.broadcastTranscriptionLLMResponse(fallbackResult);
-        
+        this.broadcastTranscriptionLLMResponse(fallbackResult, tracked.id);
+
         logger.info("Used fallback response for transcription", {
           skill: this.activeSkill,
           fallbackResponse: fallbackResult.response
         });
-        
       } catch (fallbackError) {
         logger.error("Fallback response also failed", {
           fallbackError: fallbackError.message
@@ -1260,6 +1398,8 @@ class ApplicationController {
           }
         });
       }
+    } finally {
+      this.clearTrackedLlmRequest(tracked.id);
     }
   }
 
@@ -1277,11 +1417,12 @@ class ApplicationController {
     });
   }
 
-  broadcastLLMSuccess(llmResult) {
+  broadcastLLMSuccess(llmResult, requestId = null) {
     const broadcastData = {
       response: llmResult.response,
       metadata: llmResult.metadata,
       skill: this.activeSkill, // Add the current active skill to the top level
+      requestId
     };
 
     logger.info("Broadcasting LLM success to all windows", {
@@ -1301,12 +1442,13 @@ class ApplicationController {
     });
   }
 
-  broadcastTranscriptionLLMResponse(llmResult) {
+  broadcastTranscriptionLLMResponse(llmResult, requestId = null) {
     const broadcastData = {
       response: llmResult.response,
       metadata: llmResult.metadata,
       skill: this.activeSkill,
-      isTranscriptionResponse: true
+      isTranscriptionResponse: true,
+      requestId
     };
 
     logger.info("Broadcasting transcription LLM response to all windows", {
