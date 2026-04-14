@@ -32,7 +32,7 @@ class WindowManager {
     
     this.windowConfigs = {
       main: {
-        width: 520,
+        width: 900,
         height: 35,
         useContentSize: true,
         file: 'index.html',
@@ -311,8 +311,8 @@ class WindowManager {
         titleBarOverlay: false,
         transparent: true,
         backgroundColor: '#00000000',
-  // Allow resizing so users can adjust width; we will lock height in handlers
-  resizable: true,
+  // Keep fixed to avoid native resize cursor/handles in stealth mode
+  resizable: false,
     // Keep the original max width as cap; allow small min width so it can collapse to one icon
     minWidth: 60,
     maxWidth: this.windowConfigs.main.width,

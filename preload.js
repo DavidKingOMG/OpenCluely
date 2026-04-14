@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setLlmProviderConfig: (payload) => ipcRenderer.invoke('set-llm-provider-config', payload),
   getLlmStatus: () => ipcRenderer.invoke('get-llm-status'),
   testLlmConnection: () => ipcRenderer.invoke('test-llm-connection'),
+  cancelActivePrompt: () => ipcRenderer.invoke('cancel-active-prompt'),
   getLlmProviders: () => ipcRenderer.invoke('get-llm-providers'),
   startCodexLogin: (payload = {}) => ipcRenderer.invoke('start-codex-login', payload),
   setCodexAuthToken: (token) => ipcRenderer.invoke('set-codex-auth-token', { token }),
@@ -68,10 +69,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quit: () => {
     try {
       ipcRenderer.send('quit-app');
-      // Also try the app quit method
-      setTimeout(() => {
-        require('electron').app.quit();
-      }, 100);
     } catch (error) {
       console.error('Error in quit:', error);
     }
@@ -107,6 +104,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOcrError: (callback) => ipcRenderer.on('ocr-error', callback),
   onLlmResponse: (callback) => ipcRenderer.on('llm-response', callback),
   onLlmError: (callback) => ipcRenderer.on('llm-error', callback),
+  onLlmRequestCancelled: (callback) => ipcRenderer.on('llm-request-cancelled', callback),
   onTranscriptionLlmResponse: (callback) => ipcRenderer.on('transcription-llm-response', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
   onOpenLlmConfig: (callback) => ipcRenderer.on('open-llm-config', callback),
@@ -114,6 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onShowLoading: (callback) => ipcRenderer.on('show-loading', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),
+  onOverlayOpacityChanged: (callback) => ipcRenderer.on('overlay-opacity-changed', callback),
   onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),
   onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),

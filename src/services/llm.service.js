@@ -288,8 +288,10 @@ class LLMService {
   }
 
   async performJsonRequest(url, options = {}) {
+    const { signal } = options;
     const body = options.body || {};
     const formEncoded = options.formEncoded === true;
+    const parseSse = options.parseSse === true;
     const postData = formEncoded
       ? querystring.stringify(body)
       : JSON.stringify(body);
@@ -307,6 +309,29 @@ class LLMService {
     };
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let locallyAborted = false;
+
+      const cleanupSignal = () => {
+        if (signal) {
+          signal.removeEventListener('abort', abortHandler);
+        }
+      };
+
+      const safeResolve = (value) => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        resolve(value);
+      };
+
+      const safeReject = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        reject(error);
+      };
+
       const req = https.request(url, requestOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => {
@@ -314,22 +339,67 @@ class LLMService {
         });
         res.on('end', () => {
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+            safeReject(new Error(`HTTP ${res.statusCode}: ${data}`));
             return;
           }
+
           try {
-            resolve(data ? JSON.parse(data) : {});
+            if (parseSse) {
+              const contentType = String(res.headers['content-type'] || '').toLowerCase();
+              const isSse = contentType.includes('text/event-stream') || String(data).includes('\ndata: ');
+              if (isSse) {
+                const parsed = this.parseSSEToJson(data);
+                if (!parsed) {
+                  const sample = String(data || '').slice(0, 800);
+                  logger.warn('Unable to parse SSE provider response', {
+                    provider: this.getCurrentProvider(),
+                    contentType,
+                    sample
+                  });
+                  safeReject(new Error('Failed to parse SSE provider response'));
+                  return;
+                }
+                safeResolve(parsed);
+                return;
+              }
+            }
+
+            safeResolve(data ? JSON.parse(data) : {});
           } catch (error) {
-            reject(new Error(`Failed to parse JSON response: ${error.message}`));
+            safeReject(new Error(`Failed to parse JSON response: ${error.message}`));
           }
         });
       });
 
-      req.on('error', (error) => reject(new Error(`Login request failed: ${error.message}`)));
+      const abortHandler = () => {
+        locallyAborted = true;
+        req.destroy(new Error('Request aborted'));
+      };
+
+      req.on('error', (error) => {
+        if (this.isRequestCancelled(error, signal, locallyAborted)) {
+          safeReject(new Error('LLM request cancelled'));
+          return;
+        }
+
+        safeReject(new Error(`Provider request failed: ${error.message}`));
+      });
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error('Login request timeout'));
+        safeReject(new Error('Provider request timeout'));
       });
+
+      if (signal) {
+        signal.addEventListener('abort', abortHandler, { once: true });
+        if (signal.aborted) {
+          abortHandler();
+          return;
+        }
+      }
+
+      if (settled || req.destroyed) {
+        return;
+      }
 
       req.write(postData);
       req.end();
@@ -452,7 +522,7 @@ class LLMService {
    * @param {string|null} programmingLanguage - optional language context for skills that need it
    * @returns {Promise<{response: string, metadata: object}>}
    */
-  async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null) {
+  async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, options = {}) {
     if (!this.isInitialized) {
       throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
@@ -490,7 +560,7 @@ class LLMService {
         request.systemInstruction = { parts: [{ text: skillPrompt }] };
       }
 
-      let responseText = await this.executeRequest(request);
+      let responseText = await this.executeRequest(request, options);
 
       // Enforce language in code fences if provided
       const finalResponse = programmingLanguage
@@ -520,6 +590,10 @@ class LLMService {
         }
       };
     } catch (error) {
+      if (this.isRequestCancelled(error, options.signal)) {
+        throw new Error('LLM request cancelled');
+      }
+
       this.errorCount++;
       logger.error('LLM image processing failed', {
         error: error.message,
@@ -539,7 +613,7 @@ class LLMService {
     return `Analyze this image for a ${activeSkill.toUpperCase()} question. Extract the problem concisely and provide the best possible solution with explanation and final code.${langNote}`;
   }
 
-  async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
+  async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null, options = {}) {
     if (!this.isInitialized) {
       throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
@@ -558,7 +632,7 @@ class LLMService {
 
       const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
-      const response = await this.executeRequest(geminiRequest);
+      const response = await this.executeRequest(geminiRequest, options);
       
       // Enforce language in code fences if programmingLanguage specified
       const finalResponse = programmingLanguage
@@ -584,6 +658,10 @@ class LLMService {
         }
       };
     } catch (error) {
+      if (this.isRequestCancelled(error, options.signal)) {
+        throw new Error('LLM request cancelled');
+      }
+
       this.errorCount++;
       logger.error('LLM processing failed', {
         error: error.message,
@@ -600,7 +678,7 @@ class LLMService {
     }
   }
 
-  async processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
+  async processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory = [], programmingLanguage = null, options = {}) {
     if (!this.isInitialized) {
       throw new Error(`LLM service not initialized. Check ${this.getProviderDisplayName()} credentials configuration.`);
     }
@@ -619,7 +697,7 @@ class LLMService {
 
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
-      const response = await this.executeRequest(geminiRequest);
+      const response = await this.executeRequest(geminiRequest, options);
       
       // Enforce language in code fences if programmingLanguage specified
       const finalResponse = programmingLanguage
@@ -646,6 +724,10 @@ class LLMService {
         }
       };
     } catch (error) {
+      if (this.isRequestCancelled(error, options.signal)) {
+        throw new Error('LLM request cancelled');
+      }
+
       this.errorCount++;
       logger.error('LLM transcription processing failed', {
         error: error.message,
@@ -986,7 +1068,8 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     return `Context: ${activeSkill.toUpperCase()} analysis request\n\nText to analyze:\n${text}`;
   }
 
-  async executeRequest(requestPayload) {
+  async executeRequest(requestPayload, options = {}) {
+    const { signal } = options;
     const provider = this.getCurrentProvider();
     const providerConfig = this.getProviderConfig(provider);
     const maxRetries = providerConfig.maxRetries || 3;
@@ -1002,7 +1085,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         await this.performPreflightCheck();
-        const response = await this.executeProviderRequest(requestPayload, provider, timeout);
+        const response = await this.executeProviderRequest(requestPayload, provider, timeout, signal);
 
         logger.debug('LLM request successful', {
           provider,
@@ -1012,6 +1095,10 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
         return response;
       } catch (error) {
+        if (this.isRequestCancelled(error, signal)) {
+          throw new Error('LLM request cancelled');
+        }
+
         const errorInfo = this.analyzeError(error);
 
         logger.warn(`LLM API attempt ${attempt} failed`, {
@@ -1029,18 +1116,25 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         }
 
         const baseDelay = errorInfo.isNetworkError ? 2500 : 1500;
-        await this.delay(baseDelay * attempt + Math.random() * 1000);
+        await this.delay(baseDelay * attempt + Math.random() * 1000, signal);
       }
     }
   }
 
-  async executeProviderRequest(requestPayload, provider, timeout) {
+  async executeProviderRequest(requestPayload, provider, timeout, signal) {
     const apiKey = this.getProviderApiKey(provider);
     const endpoint = this.getProviderEndpoint(provider, this.getCurrentModel());
     const body = this.toProviderPayload(requestPayload, provider);
     const headers = this.getProviderHeaders(provider, apiKey, body);
 
-    const raw = await this.performHttpsPost(endpoint, body, headers, timeout);
+    const raw = await this.performJsonRequest(endpoint, {
+      method: 'POST',
+      body,
+      headers,
+      timeout,
+      signal,
+      parseSse: true
+    });
     return this.extractProviderText(raw, provider);
   }
 
@@ -1214,7 +1308,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     return headers;
   }
 
-  performHttpsPost(url, payload, headers, timeout) {
+  performHttpsPost(url, payload, headers, timeout, signal) {
     const postData = JSON.stringify(payload);
     const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
 
@@ -1226,6 +1320,29 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     };
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let locallyAborted = false;
+
+      const cleanupSignal = () => {
+        if (signal) {
+          signal.removeEventListener('abort', abortHandler);
+        }
+      };
+
+      const safeResolve = (value) => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        resolve(value);
+      };
+
+      const safeReject = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        reject(error);
+      };
+
       const req = https.request(url, options, (res) => {
         let data = '';
         res.on('data', (chunk) => {
@@ -1233,7 +1350,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         });
         res.on('end', () => {
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+            safeReject(new Error(`HTTP ${res.statusCode}: ${data}`));
             return;
           }
 
@@ -1249,29 +1366,78 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
                   contentType,
                   sample
                 });
-                reject(new Error('Failed to parse SSE provider response'));
+                safeReject(new Error('Failed to parse SSE provider response'));
                 return;
               }
-              resolve(parsed);
+              safeResolve(parsed);
               return;
             }
 
-            resolve(JSON.parse(data));
+            safeResolve(JSON.parse(data));
           } catch (parseError) {
-            reject(new Error(`Failed to parse provider response: ${parseError.message}`));
+            safeReject(new Error(`Failed to parse provider response: ${parseError.message}`));
           }
         });
       });
 
-      req.on('error', (error) => reject(new Error(`Provider request failed: ${error.message}`)));
+      const abortHandler = () => {
+        locallyAborted = true;
+        req.destroy(new Error('Request aborted'));
+      };
+
+      req.on('error', (error) => {
+        if (this.isRequestCancelled(error, signal, locallyAborted)) {
+          safeReject(new Error('LLM request cancelled'));
+          return;
+        }
+
+        safeReject(new Error(`Provider request failed: ${error.message}`));
+      });
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error('Provider request timeout'));
+        safeReject(new Error('Provider request timeout'));
       });
+
+      if (signal) {
+        signal.addEventListener('abort', abortHandler, { once: true });
+        if (signal.aborted) {
+          abortHandler();
+          return;
+        }
+      }
+
+      if (settled || req.destroyed) {
+        return;
+      }
 
       req.write(postData);
       req.end();
     });
+  }
+
+  isRequestCancelled(error, signal, locallyAborted = false) {
+    if (signal?.aborted) {
+      return true;
+    }
+
+    if (locallyAborted) {
+      return true;
+    }
+
+    if (!error) {
+      return false;
+    }
+
+    if (error.name === 'AbortError') {
+      return true;
+    }
+
+    if (String(error.code || '').toUpperCase() === 'ABORT_ERR') {
+      return true;
+    }
+
+    const message = String(error.message || '').trim().toLowerCase();
+    return message === 'request aborted' || message === 'llm request cancelled';
   }
 
   parseSSEToJson(sseText) {
@@ -1849,8 +2015,46 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     };
   }
 
-  delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  delay(ms, signal) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
+      const cleanupSignal = () => {
+        if (signal) {
+          signal.removeEventListener('abort', onAbort);
+        }
+      };
+
+      const safeResolve = () => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        resolve();
+      };
+
+      const safeReject = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanupSignal();
+        reject(error);
+      };
+
+      const onAbort = () => {
+        clearTimeout(timer);
+        safeReject(new Error('LLM request cancelled'));
+      };
+
+      const timer = setTimeout(() => {
+        safeResolve();
+      }, ms);
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+      }
+    });
   }
 }
 
